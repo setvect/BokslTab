@@ -19,6 +19,22 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertEqual(state.selectedItem?.title, "B")
     }
 
+
+    func testSelectClampsToAvailableItems() {
+        let app = AppIdentity(processIdentifier: 1, localizedName: "App")
+        let items = [
+            SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 10, ownerProcessIdentifier: 1, title: "A"))),
+            SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 11, ownerProcessIdentifier: 1, title: "B")))
+        ]
+        var state = SwitcherState(mode: .allAppsAndWindows, items: items)
+
+        state.select(index: 99)
+        XCTAssertEqual(state.selectedIndex, 1)
+
+        state.select(index: -1)
+        XCTAssertEqual(state.selectedIndex, 0)
+    }
+
     func testTitleFallbackUsesAppNameForUntitledWindow() {
         let app = AppIdentity(processIdentifier: 1, localizedName: "FallbackApp")
         let item = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 10, ownerProcessIdentifier: 1, title: "   ")))

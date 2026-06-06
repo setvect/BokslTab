@@ -16,6 +16,20 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         XCTAssertEqual(SwitcherKeyboardMapper.action(for: keyEvent(keyCode: 53)), .cancel)
     }
 
+
+    func testPanelListHeightReservesVisibleRows() {
+        XCTAssertEqual(SwitcherPanelLayout.listHeight(itemCount: 0), SwitcherPanelLayout.rowHeight)
+        XCTAssertEqual(
+            SwitcherPanelLayout.listHeight(itemCount: 3),
+            SwitcherPanelLayout.rowHeight * 3 + SwitcherPanelLayout.rowSpacing * 2
+        )
+        XCTAssertEqual(
+            SwitcherPanelLayout.listHeight(itemCount: 99),
+            SwitcherPanelLayout.rowHeight * CGFloat(SwitcherPanelLayout.maxVisibleRows)
+                + SwitcherPanelLayout.rowSpacing * CGFloat(SwitcherPanelLayout.maxVisibleRows - 1)
+        )
+    }
+
     private func keyEvent(keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
         NSEvent.keyEvent(
             with: .keyDown,

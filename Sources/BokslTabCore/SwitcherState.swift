@@ -36,6 +36,14 @@ public struct SwitcherState: Equatable, Sendable {
         guard !items.isEmpty else { return }
         selectedIndex = (selectedIndex - 1 + items.count) % items.count
     }
+
+    public mutating func select(index: Int) {
+        guard !items.isEmpty else {
+            selectedIndex = 0
+            return
+        }
+        selectedIndex = max(0, min(index, items.count - 1))
+    }
 }
 
 public enum SwitcherItemComposer {

@@ -9,6 +9,8 @@ public struct SwitcherPanelView: View {
     private let warning: String?
     private let iconProvider: (SwitcherItem) -> NSImage?
     private let onOpenSettings: (() -> Void)?
+    private let onSelectIndex: (Int) -> Void
+    private let onActivateIndex: (Int) -> Void
 
     public init(
         mode: SwitcherMode,
@@ -16,7 +18,9 @@ public struct SwitcherPanelView: View {
         selectedIndex: Int,
         warning: String?,
         iconProvider: @escaping (SwitcherItem) -> NSImage?,
-        onOpenSettings: (() -> Void)? = nil
+        onOpenSettings: (() -> Void)? = nil,
+        onSelectIndex: @escaping (Int) -> Void = { _ in },
+        onActivateIndex: @escaping (Int) -> Void = { _ in }
     ) {
         self.mode = mode
         self.items = items
@@ -24,6 +28,8 @@ public struct SwitcherPanelView: View {
         self.warning = warning
         self.iconProvider = iconProvider
         self.onOpenSettings = onOpenSettings
+        self.onSelectIndex = onSelectIndex
+        self.onActivateIndex = onActivateIndex
     }
 
     public var body: some View {
@@ -33,25 +39,32 @@ public struct SwitcherPanelView: View {
             if items.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            SwitcherRowView(
-                                item: item,
-                                icon: iconProvider(item),
-                                isSelected: index == selectedIndex
-                            )
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: SwitcherPanelLayout.rowSpacing) {
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                SwitcherRowView(
+                                    item: item,
+                                    icon: iconProvider(item),
+                                    isSelected: index == selectedIndex,
+                                    onSelect: { onSelectIndex(index) },
+                                    onActivate: { onActivateIndex(index) }
+                                )
+                                .id(item.id)
+                            }
                         }
                     }
+                    .frame(height: SwitcherPanelLayout.listHeight(itemCount: items.count))
+                    .onAppear { scrollSelectedIntoView(proxy: proxy) }
+                    .onChange(of: selectedIndex) { _ in scrollSelectedIntoView(proxy: proxy) }
                 }
-                .frame(maxHeight: 420)
             }
 
             if let warning {
                 WarningBanner(message: warning, onOpenSettings: onOpenSettings)
             }
 
-            Text("↑↓/Tab 이동 · Enter 전환 · Esc 닫기")
+            Text("↑↓/Tab 이동 · Enter 전환 · Esc 닫기 · 클릭 선택")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -78,6 +91,23 @@ public struct SwitcherPanelView: View {
             .font(.body)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 96)
+    }
+
+    private func scrollSelectedIntoView(proxy: ScrollViewProxy) {
+        guard !items.isEmpty, selectedIndex >= 0, selectedIndex < items.count else { return }
+        proxy.scrollTo(items[selectedIndex].id, anchor: .center)
+    }
+}
+
+enum SwitcherPanelLayout {
+    static let rowHeight: CGFloat = 52
+    static let rowSpacing: CGFloat = 6
+    static let maxVisibleRows = 7
+
+    static func listHeight(itemCount: Int) -> CGFloat {
+        let visibleRows = min(max(itemCount, 1), maxVisibleRows)
+        let gaps = max(visibleRows - 1, 0)
+        return CGFloat(visibleRows) * rowHeight + CGFloat(gaps) * rowSpacing
     }
 }
 
@@ -107,6 +137,8 @@ private struct SwitcherRowView: View {
     let item: SwitcherItem
     let icon: NSImage?
     let isSelected: Bool
+    let onSelect: () -> Void
+    let onActivate: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -128,10 +160,13 @@ private struct SwitcherRowView: View {
 
             Spacer()
         }
+        .frame(height: SwitcherPanelLayout.rowHeight)
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
         .background(isSelected ? Color.accentColor.opacity(0.78) : Color.white.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .onTapGesture(count: 2, perform: onActivate)
     }
 }
 

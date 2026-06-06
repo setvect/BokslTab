@@ -6,7 +6,9 @@ import SwiftUI
 public final class SwitcherPanelController {
     private let window: SwitcherPanelWindow
     private let iconProvider: (SwitcherItem) -> NSImage?
+    private let onAction: (SwitcherKeyboardAction) -> Void
     private let onOpenSettings: () -> Void
+    private var keyEventMonitor: Any?
 
     public init(
         iconProvider: @escaping (SwitcherItem) -> NSImage?,
@@ -14,9 +16,16 @@ public final class SwitcherPanelController {
         onOpenSettings: @escaping () -> Void
     ) {
         self.iconProvider = iconProvider
+        self.onAction = onKeyboardAction
         self.onOpenSettings = onOpenSettings
         self.window = SwitcherPanelWindow()
         self.window.onKeyboardAction = onKeyboardAction
+    }
+
+    deinit {
+        if let keyEventMonitor {
+            NSEvent.removeMonitor(keyEventMonitor)
+        }
     }
 
     public var isVisible: Bool {
@@ -26,7 +35,9 @@ public final class SwitcherPanelController {
     public func show(state: SwitcherState, warning: String?) {
         update(state: state, warning: warning)
         positionNearCenter()
+        installKeyEventMonitorIfNeeded()
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(window)
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -42,13 +53,39 @@ public final class SwitcherPanelController {
                 selectedIndex: state.selectedIndex,
                 warning: warning,
                 iconProvider: iconProvider,
-                onOpenSettings: onOpenSettings
+                onOpenSettings: onOpenSettings,
+                onSelectIndex: { [weak self] index in self?.onAction(.select(index: index)) },
+                onActivateIndex: { [weak self] index in self?.onAction(.activate(index: index)) }
             )
         )
     }
 
     public func hide() {
         window.orderOut(nil)
+        removeKeyEventMonitor()
+    }
+
+    private func installKeyEventMonitorIfNeeded() {
+        guard keyEventMonitor == nil else { return }
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            return self.handleMonitoredKeyEvent(event)
+        }
+    }
+
+    private func removeKeyEventMonitor() {
+        if let keyEventMonitor {
+            NSEvent.removeMonitor(keyEventMonitor)
+            self.keyEventMonitor = nil
+        }
+    }
+
+    private func handleMonitoredKeyEvent(_ event: NSEvent) -> NSEvent? {
+        guard window.isVisible else { return event }
+        guard event.window == window || NSApp.keyWindow == window else { return event }
+        guard let action = SwitcherKeyboardMapper.action(for: event) else { return event }
+        onAction(action)
+        return nil
     }
 
     private func positionNearCenter() {

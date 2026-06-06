@@ -161,6 +161,12 @@ final class SwitcherCoordinator {
             activateSelectedItem()
         case .cancel:
             cancelAndRestoreFocus()
+        case .select(let index):
+            state.select(index: index)
+            panelController.update(state: state, warning: currentWarning)
+        case .activate(let index):
+            state.select(index: index)
+            activateSelectedItem()
         }
     }
 
