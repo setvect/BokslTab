@@ -34,27 +34,53 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         )
         guard !axSnapshotsByPID.isEmpty else { return snapshots }
 
-        return snapshots.map { snapshot in
-            guard let axSnapshot = bestAccessibilityMatch(
-                for: snapshot,
-                candidates: axSnapshotsByPID[snapshot.identity.ownerProcessIdentifier] ?? []
-            ) else { return snapshot }
+        var enrichedSnapshots = snapshots
 
-            let title = WindowTitleSelectionPolicy.bestTitle(
-                coreGraphicsTitle: snapshot.identity.title,
-                accessibilityTitle: axSnapshot.title
-            )
-            guard title != snapshot.identity.title else { return snapshot }
+        for processIdentifier in Set(snapshots.map({ $0.identity.ownerProcessIdentifier })) {
+            guard let axSnapshots = axSnapshotsByPID[processIdentifier], !axSnapshots.isEmpty else { continue }
 
-            return WindowSnapshot(
-                identity: WindowIdentity(
-                    windowID: snapshot.identity.windowID,
-                    ownerProcessIdentifier: snapshot.identity.ownerProcessIdentifier,
-                    title: title
-                ),
-                bounds: snapshot.bounds
+            let snapshotIndices = enrichedSnapshots.indices.filter {
+                enrichedSnapshots[$0].identity.ownerProcessIdentifier == processIdentifier
+            }
+            var usedAXIndices = Set<Int>()
+
+            for snapshotIndex in snapshotIndices {
+                let availableAXIndices = axSnapshots.indices.filter { !usedAXIndices.contains($0) }
+                guard let axIndex = bestAccessibilityMatchIndex(
+                    for: enrichedSnapshots[snapshotIndex],
+                    candidates: axSnapshots,
+                    candidateIndices: availableAXIndices
+                ) else { continue }
+
+                usedAXIndices.insert(axIndex)
+                enrichedSnapshots[snapshotIndex] = enrichedSnapshots[snapshotIndex].withTitle(
+                    WindowTitleSelectionPolicy.bestTitle(
+                        coreGraphicsTitle: enrichedSnapshots[snapshotIndex].identity.title,
+                        accessibilityTitle: axSnapshots[axIndex].title
+                    )
+                )
+            }
+
+            let untitledSnapshotIndices = snapshotIndices.filter {
+                enrichedSnapshots[$0].identity.title?.nonBlankCatalogTitle == nil
+            }
+            let availableTitles = axSnapshots.indices
+                .filter { !usedAXIndices.contains($0) }
+                .compactMap { axSnapshots[$0].title }
+            let fallbackAssignments = AXTitleFallbackPolicy.assignUniqueTitles(
+                untitledWindowIDs: untitledSnapshotIndices.map { enrichedSnapshots[$0].identity.windowID },
+                availableTitles: availableTitles
             )
+
+            for snapshotIndex in untitledSnapshotIndices {
+                let windowID = enrichedSnapshots[snapshotIndex].identity.windowID
+                if let title = fallbackAssignments[windowID] {
+                    enrichedSnapshots[snapshotIndex] = enrichedSnapshots[snapshotIndex].withTitle(title)
+                }
+            }
         }
+
+        return enrichedSnapshots
     }
 
     private func accessibilityWindowSnapshotsByPID(_ processIdentifiers: Set<Int32>) -> [Int32: [AccessibilityWindowSnapshot]] {
@@ -76,28 +102,53 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         return snapshotsByPID
     }
 
-    private func bestAccessibilityMatch(
+    private func bestAccessibilityMatchIndex(
         for snapshot: WindowSnapshot,
-        candidates: [AccessibilityWindowSnapshot]
-    ) -> AccessibilityWindowSnapshot? {
-        if let matchedIndex = WindowFrameMatchPolicy.bestMatchIndex(
+        candidates: [AccessibilityWindowSnapshot],
+        candidateIndices: [Int]
+    ) -> Int? {
+        let candidateFrames = candidateIndices.map { candidates[$0].frame }
+
+        if let localIndex = WindowFrameMatchPolicy.bestFrameMatchIndex(
             targetFrame: snapshot.bounds,
-            candidateFrames: candidates.map(\.frame)
+            candidateFrames: candidateFrames
         ) {
-            return candidates[matchedIndex]
+            return candidateIndices[localIndex]
         }
 
-        // If both APIs report exactly one window for a process, matching is still unambiguous.
-        return candidates.count == 1 ? candidates[0] : nil
+        if let localIndex = WindowFrameMatchPolicy.bestSizeMatchIndex(
+            targetFrame: snapshot.bounds,
+            candidateFrames: candidateFrames
+        ) {
+            return candidateIndices[localIndex]
+        }
+
+        // If both APIs report exactly one remaining window for a process, matching is still unambiguous.
+        return candidateIndices.count == 1 ? candidateIndices[0] : nil
     }
 }
 
 struct WindowFrameMatchPolicy {
-    static let maximumDistance: CGFloat = 24
+    static let maximumFrameDistance: CGFloat = 24
+    static let maximumSizeDistance: CGFloat = 12
 
-    static func bestMatchIndex(targetFrame: CGRect, candidateFrames: [CGRect]) -> Int? {
-        let matches = candidateFrames.enumerated()
-            .map { index, frame in (index: index, distance: frame.distance(to: targetFrame)) }
+    static func bestFrameMatchIndex(targetFrame: CGRect, candidateFrames: [CGRect]) -> Int? {
+        bestUniqueMatchIndex(
+            distances: candidateFrames.map { $0.frameDistance(to: targetFrame) },
+            maximumDistance: maximumFrameDistance
+        )
+    }
+
+    static func bestSizeMatchIndex(targetFrame: CGRect, candidateFrames: [CGRect]) -> Int? {
+        bestUniqueMatchIndex(
+            distances: candidateFrames.map { $0.sizeDistance(to: targetFrame) },
+            maximumDistance: maximumSizeDistance
+        )
+    }
+
+    private static func bestUniqueMatchIndex(distances: [CGFloat], maximumDistance: CGFloat) -> Int? {
+        let matches = distances.enumerated()
+            .map { index, distance in (index: index, distance: distance) }
             .filter { $0.distance <= maximumDistance }
             .sorted { lhs, rhs in lhs.distance < rhs.distance }
 
@@ -106,6 +157,22 @@ struct WindowFrameMatchPolicy {
             return nil
         }
         return best.index
+    }
+}
+
+struct AXTitleFallbackPolicy {
+    static func assignUniqueTitles(untitledWindowIDs: [UInt32], availableTitles: [String]) -> [UInt32: String] {
+        let normalizedTitles = availableTitles.compactMap(\.nonBlankCatalogTitle)
+        guard !untitledWindowIDs.isEmpty,
+              untitledWindowIDs.count == normalizedTitles.count,
+              Set(normalizedTitles).count == normalizedTitles.count
+        else { return [:] }
+
+        let sortedWindowIDs = untitledWindowIDs.sorted()
+        let sortedTitles = normalizedTitles.sorted { lhs, rhs in
+            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        return Dictionary(uniqueKeysWithValues: zip(sortedWindowIDs, sortedTitles))
     }
 }
 
@@ -153,6 +220,17 @@ private struct WindowSnapshot {
         )
     }
 
+    func withTitle(_ title: String?) -> WindowSnapshot {
+        WindowSnapshot(
+            identity: WindowIdentity(
+                windowID: identity.windowID,
+                ownerProcessIdentifier: identity.ownerProcessIdentifier,
+                title: title
+            ),
+            bounds: bounds
+        )
+    }
+
     static func isReasonableWindowBounds(_ bounds: CGRect) -> Bool {
         bounds.width >= 40 && bounds.height >= 40
     }
@@ -190,11 +268,15 @@ private extension CGRect {
         return CGRect(origin: origin, size: size)
     }
 
-    func distance(to other: CGRect) -> CGFloat {
+    func frameDistance(to other: CGRect) -> CGFloat {
         abs(minX - other.minX)
             + abs(minY - other.minY)
             + abs(width - other.width)
             + abs(height - other.height)
+    }
+
+    func sizeDistance(to other: CGRect) -> CGFloat {
+        abs(width - other.width) + abs(height - other.height)
     }
 }
 

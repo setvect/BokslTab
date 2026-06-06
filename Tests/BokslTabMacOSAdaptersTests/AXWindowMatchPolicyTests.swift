@@ -31,7 +31,7 @@ final class AXWindowMatchPolicyTests: XCTestCase {
     }
 
     func testFrameMatchChoosesClosestCandidateRatherThanListOrder() {
-        let index = WindowFrameMatchPolicy.bestMatchIndex(
+        let index = WindowFrameMatchPolicy.bestFrameMatchIndex(
             targetFrame: CGRect(x: 100, y: 100, width: 400, height: 300),
             candidateFrames: [
                 CGRect(x: 0, y: 0, width: 400, height: 300),
@@ -43,7 +43,7 @@ final class AXWindowMatchPolicyTests: XCTestCase {
     }
 
     func testFrameMatchRejectsEqualDistanceTie() {
-        let index = WindowFrameMatchPolicy.bestMatchIndex(
+        let index = WindowFrameMatchPolicy.bestFrameMatchIndex(
             targetFrame: CGRect(x: 100, y: 100, width: 400, height: 300),
             candidateFrames: [
                 CGRect(x: 99, y: 100, width: 400, height: 300),
@@ -52,6 +52,59 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         )
 
         XCTAssertNil(index)
+    }
+
+    func testSizeMatchHandlesDesktopRevealMovedOrigins() {
+        let index = WindowFrameMatchPolicy.bestSizeMatchIndex(
+            targetFrame: CGRect(x: -1600, y: 100, width: 820, height: 600),
+            candidateFrames: [
+                CGRect(x: 100, y: 100, width: 500, height: 400),
+                CGRect(x: 200, y: 120, width: 822, height: 602)
+            ]
+        )
+
+        XCTAssertEqual(index, 1)
+    }
+
+    func testSizeMatchRejectsEqualSizeTie() {
+        let index = WindowFrameMatchPolicy.bestSizeMatchIndex(
+            targetFrame: CGRect(x: -1600, y: 100, width: 820, height: 600),
+            candidateFrames: [
+                CGRect(x: 100, y: 100, width: 820, height: 600),
+                CGRect(x: 200, y: 120, width: 820, height: 600)
+            ]
+        )
+
+        XCTAssertNil(index)
+    }
+
+    func testUniqueTitleFallbackAssignsRealTitlesToUntitledWindowsDeterministically() {
+        let assignments = AXTitleFallbackPolicy.assignUniqueTitles(
+            untitledWindowIDs: [613, 77],
+            availableTitles: [
+                "oh-my-codex - YouTube - Brave",
+                "[#again_playlist] 이소라의 프로포즈 레전드 Playlist | KBS 방송 - Brave"
+            ]
+        )
+
+        XCTAssertEqual(assignments.count, 2)
+        XCTAssertEqual(assignments[77], "[#again_playlist] 이소라의 프로포즈 레전드 Playlist | KBS 방송 - Brave")
+        XCTAssertEqual(assignments[613], "oh-my-codex - YouTube - Brave")
+    }
+
+    func testUniqueTitleFallbackRejectsDuplicateOrCountMismatch() {
+        XCTAssertTrue(
+            AXTitleFallbackPolicy.assignUniqueTitles(
+                untitledWindowIDs: [1, 2],
+                availableTitles: ["Same", "Same"]
+            ).isEmpty
+        )
+        XCTAssertTrue(
+            AXTitleFallbackPolicy.assignUniqueTitles(
+                untitledWindowIDs: [1, 2],
+                availableTitles: ["Only one"]
+            ).isEmpty
+        )
     }
 
     func testBestTitleUsesAccessibilityWhenItAddsContext() {
