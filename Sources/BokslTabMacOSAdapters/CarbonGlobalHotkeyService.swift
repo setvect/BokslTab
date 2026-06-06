@@ -36,6 +36,8 @@ public final class CarbonGlobalHotkeyService: GlobalHotkeyServicing {
             throw HotkeyRegistrationError.handlerInstallFailed(code: installStatus)
         }
 
+        var failures: [HotkeyRegistrationFailure] = []
+
         for (index, definition) in definitions.enumerated() {
             var hotkeyRef: EventHotKeyRef?
             let hotkeyID = EventHotKeyID(signature: signature, id: UInt32(index + 1))
@@ -49,12 +51,22 @@ public final class CarbonGlobalHotkeyService: GlobalHotkeyServicing {
             )
 
             guard status == noErr, let registeredRef = hotkeyRef else {
-                stop()
-                throw HotkeyRegistrationError.registrationFailed(mode: definition.mode, code: status)
+                failures.append(HotkeyRegistrationFailure(definition: definition, code: status))
+                continue
             }
 
             hotkeyRefs.append(registeredRef)
             modeByHotkeyID[hotkeyID.id] = definition.mode
+        }
+
+        if !failures.isEmpty {
+            if hotkeyRefs.isEmpty {
+                stop()
+                if failures.count == 1, let failure = failures.first {
+                    throw HotkeyRegistrationError.registrationFailed(definition: failure.definition, code: failure.code)
+                }
+            }
+            throw HotkeyRegistrationError.partialRegistrationFailed(failures: failures)
         }
     }
 

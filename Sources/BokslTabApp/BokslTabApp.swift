@@ -96,6 +96,7 @@ final class SwitcherCoordinator {
 
     private var state = SwitcherState(mode: .allAppsAndWindows, items: [])
     private var currentWarning: String?
+    private var startupWarning: String?
     private var previousFrontmostApp: AppIdentity?
 
     init(
@@ -116,20 +117,75 @@ final class SwitcherCoordinator {
     }
 
     func start() {
+        let allAppsDefinition = SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
+        let activeAppDefinition = SwitcherMode.activeAppWindows.defaultHotkeyDefinition
         let definitions = [
-            HotkeyDefinition(mode: .allAppsAndWindows, keyCode: 48, modifiers: [.option]),
-            HotkeyDefinition(mode: .activeAppWindows, keyCode: 50, modifiers: [.option])
+            allAppsDefinition,
+            activeAppDefinition
         ]
 
         do {
-            try hotkeyService.start(definitions: definitions) { [weak self] mode in
-                DispatchQueue.main.async {
-                    self?.show(mode: mode)
-                }
-            }
+            try registerHotkeys(definitions)
         } catch {
             reportDiagnostic("전역 단축키 등록 실패: \(error)")
+            retryPrimaryHotkeyIfActiveAppHotkeyConflicted(
+                error: error,
+                primaryDefinition: allAppsDefinition,
+                conflictingDefinition: activeAppDefinition
+            )
         }
+    }
+
+    private func registerHotkeys(_ definitions: [HotkeyDefinition]) throws {
+        try hotkeyService.start(definitions: definitions) { [weak self] mode in
+            DispatchQueue.main.async {
+                self?.show(mode: mode)
+            }
+        }
+    }
+
+    private func retryPrimaryHotkeyIfActiveAppHotkeyConflicted(
+        error: Error,
+        primaryDefinition: HotkeyDefinition,
+        conflictingDefinition: HotkeyDefinition
+    ) {
+        if case HotkeyRegistrationError.partialRegistrationFailed(let failures) = error {
+            let activeAppHotkeyFailed = failures.contains { $0.definition == conflictingDefinition }
+            let primaryHotkeyFailed = failures.contains { $0.definition == primaryDefinition }
+            guard activeAppHotkeyFailed else { return }
+
+            if !primaryHotkeyFailed {
+                reportActiveAppHotkeyFallback(conflictingDefinition)
+                return
+            }
+
+            retryPrimaryHotkey(primaryDefinition, conflictingDefinition: conflictingDefinition)
+            return
+        }
+
+        guard case HotkeyRegistrationError.registrationFailed(let failedDefinition, _) = error,
+              failedDefinition == conflictingDefinition
+        else { return }
+
+        retryPrimaryHotkey(primaryDefinition, conflictingDefinition: conflictingDefinition)
+    }
+
+    private func retryPrimaryHotkey(
+        _ primaryDefinition: HotkeyDefinition,
+        conflictingDefinition: HotkeyDefinition
+    ) {
+        do {
+            try registerHotkeys([primaryDefinition])
+            reportActiveAppHotkeyFallback(conflictingDefinition)
+        } catch {
+            reportDiagnostic("기본 단축키 대체 등록 실패: \(error)")
+        }
+    }
+
+    private func reportActiveAppHotkeyFallback(_ conflictingDefinition: HotkeyDefinition) {
+        let message = "활성 앱 단축키 \(conflictingDefinition) 등록 실패로 모든 앱 단축키만 유지합니다."
+        startupWarning = message
+        reportDiagnostic(message)
     }
 
     func stop() {
@@ -145,7 +201,7 @@ final class SwitcherCoordinator {
 
         rememberPreviousFrontmostApp()
         state = SwitcherState(mode: mode, items: items(for: mode))
-        currentWarning = permissionWarning(for: mode)
+        currentWarning = permissionWarning(for: mode) ?? startupWarning
         panelController.show(state: state, warning: currentWarning)
     }
 
@@ -163,6 +219,8 @@ final class SwitcherCoordinator {
             cancelAndRestoreFocus()
         case .modifierReleased:
             activateSelectedItem()
+        case .focusLost:
+            dismissPanelWithoutRestoringFocus()
         case .select(let index):
             state.select(index: index)
             panelController.update(state: state, warning: currentWarning)
@@ -195,6 +253,11 @@ final class SwitcherCoordinator {
         defer { previousFrontmostApp = nil }
         guard let previousFrontmostApp else { return }
         _ = appActivator.activate(app: previousFrontmostApp)
+    }
+
+    private func dismissPanelWithoutRestoringFocus() {
+        panelController.hide()
+        previousFrontmostApp = nil
     }
 
     private func rememberPreviousFrontmostApp() {

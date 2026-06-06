@@ -53,7 +53,62 @@ public protocol GlobalHotkeyServicing: AnyObject {
     func stop()
 }
 
+public struct HotkeyRegistrationFailure: Equatable, Sendable {
+    public let definition: HotkeyDefinition
+    public let code: Int32
+
+    public init(definition: HotkeyDefinition, code: Int32) {
+        self.definition = definition
+        self.code = code
+    }
+}
+
 public enum HotkeyRegistrationError: Error, Equatable, Sendable {
     case handlerInstallFailed(code: Int32)
-    case registrationFailed(mode: SwitcherMode, code: Int32)
+    case registrationFailed(definition: HotkeyDefinition, code: Int32)
+    case partialRegistrationFailed(failures: [HotkeyRegistrationFailure])
+}
+
+public extension SwitcherMode {
+    var defaultHotkeyDefinition: HotkeyDefinition {
+        switch self {
+        case .allAppsAndWindows:
+            return HotkeyDefinition(mode: self, keyCode: 48, modifiers: [.option])
+        case .activeAppWindows:
+            return HotkeyDefinition(mode: self, keyCode: 48, modifiers: [.command])
+        }
+    }
+}
+
+extension HotkeyModifiers: CustomStringConvertible {
+    public var description: String {
+        var parts: [String] = []
+        if contains(.command) { parts.append("Cmd") }
+        if contains(.option) { parts.append("Option") }
+        if contains(.control) { parts.append("Control") }
+        if contains(.shift) { parts.append("Shift") }
+        return parts.isEmpty ? "None" : parts.joined(separator: "+")
+    }
+}
+
+extension HotkeyDefinition: CustomStringConvertible {
+    public var description: String {
+        "mode=\(mode.rawValue), hotkey=\(modifiers)+keyCode(\(keyCode))"
+    }
+}
+
+extension HotkeyRegistrationError: CustomStringConvertible {
+    public var description: String {
+        switch self {
+        case .handlerInstallFailed(let code):
+            return "handlerInstallFailed(code: \(code))"
+        case .registrationFailed(let definition, let code):
+            return "registrationFailed(\(definition), code: \(code))"
+        case .partialRegistrationFailed(let failures):
+            let details = failures
+                .map { "\($0.definition), code: \($0.code)" }
+                .joined(separator: "; ")
+            return "partialRegistrationFailed(\(details))"
+        }
+    }
 }

@@ -4,11 +4,15 @@ import SwiftUI
 
 @MainActor
 public final class SwitcherPanelController {
-    private let window: SwitcherPanelWindow
     private let iconProvider: (SwitcherItem) -> NSImage?
     private let onAction: (SwitcherKeyboardAction) -> Void
     private let onOpenSettings: () -> Void
+    private var panels: [SwitcherPanelWindow] = []
+    private var panelScreens: [NSScreen] = []
     private var keyEventMonitor: Any?
+    private var appDidResignActiveObserver: NSObjectProtocol?
+    private var isHidingProgrammatically = false
+    private var triggerModifier: SwitcherTriggerModifier = .option
 
     public init(
         iconProvider: @escaping (SwitcherItem) -> NSImage?,
@@ -18,26 +22,34 @@ public final class SwitcherPanelController {
         self.iconProvider = iconProvider
         self.onAction = onKeyboardAction
         self.onOpenSettings = onOpenSettings
-        self.window = SwitcherPanelWindow()
-        self.window.onKeyboardAction = onKeyboardAction
     }
 
     deinit {
         if let keyEventMonitor {
             NSEvent.removeMonitor(keyEventMonitor)
         }
+        if let appDidResignActiveObserver {
+            NotificationCenter.default.removeObserver(appDidResignActiveObserver)
+        }
     }
 
     public var isVisible: Bool {
-        window.isVisible
+        panels.contains { $0.isVisible }
     }
 
     public func show(state: SwitcherState, warning: String?) {
+        configurePanelsForCurrentScreens()
         update(state: state, warning: warning)
-        positionNearCenter()
+        positionPanels(state: state, warning: warning)
         installKeyEventMonitorIfNeeded()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(window)
+        installAppDidResignActiveObserverIfNeeded()
+
+        guard let primaryPanel else { return }
+        for panel in mirrorPanels {
+            panel.orderFront(nil)
+        }
+        primaryPanel.makeKeyAndOrderFront(nil)
+        primaryPanel.makeFirstResponder(primaryPanel)
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -46,25 +58,71 @@ public final class SwitcherPanelController {
     }
 
     public func update(state: SwitcherState, warning: String?) {
-        let frameBeforeUpdate = window.frame
-        window.contentViewController = NSHostingController(
-            rootView: SwitcherPanelView(
-                mode: state.mode,
-                items: state.items,
-                selectedIndex: state.selectedIndex,
-                warning: warning,
-                iconProvider: iconProvider,
-                onOpenSettings: onOpenSettings,
-                onSelectIndex: { [weak self] index in self?.onAction(.select(index: index)) },
-                onActivateIndex: { [weak self] index in self?.onAction(.activate(index: index)) }
+        if panels.isEmpty {
+            configurePanelsForCurrentScreens()
+        }
+        triggerModifier = state.mode.triggerModifier
+        let framesBeforeUpdate = panels.map(\.frame)
+
+        for (index, panel) in panels.enumerated() {
+            let screen = panelScreens[safe: index] ?? NSScreen.main
+            let availableSize = screen?.visibleFrame.size ?? SwitcherPanelLayout.defaultAvailableSize
+            panel.contentViewController = NSHostingController(
+                rootView: SwitcherPanelView(
+                    items: state.items,
+                    selectedIndex: state.selectedIndex,
+                    warning: warning,
+                    availableSize: availableSize,
+                    iconProvider: iconProvider,
+                    onOpenSettings: onOpenSettings,
+                    onSelectIndex: { [weak self] index in self?.onAction(.select(index: index)) },
+                    onActivateIndex: { [weak self] index in self?.onAction(.activate(index: index)) }
+                )
             )
-        )
-        restoreFrameAfterContentUpdate(frameBeforeUpdate)
+        }
+
+        restoreFramesAfterContentUpdate(framesBeforeUpdate)
     }
 
     public func hide() {
-        window.orderOut(nil)
+        isHidingProgrammatically = true
+        for panel in panels {
+            panel.orderOut(nil)
+        }
+        isHidingProgrammatically = false
         removeKeyEventMonitor()
+        removeAppDidResignActiveObserver()
+    }
+
+    private var primaryPanel: SwitcherPanelWindow? {
+        panels.first
+    }
+
+    private var mirrorPanels: Array<SwitcherPanelWindow>.SubSequence {
+        panels.dropFirst()
+    }
+
+    private func configurePanelsForCurrentScreens() {
+        let screens = NSScreen.screens.isEmpty ? [NSScreen.main].compactMap { $0 } : NSScreen.screens
+        guard !screens.isEmpty else { return }
+
+        let wasHidingProgrammatically = isHidingProgrammatically
+        isHidingProgrammatically = true
+        defer { isHidingProgrammatically = wasHidingProgrammatically }
+
+        for panel in panels where panel.isVisible {
+            panel.orderOut(nil)
+        }
+
+        panels = screens.enumerated().map { index, _ in
+            let panel = SwitcherPanelWindow(allowsKeyFocus: index == 0)
+            panel.onKeyboardAction = { [weak self] action in self?.onAction(action) }
+            if index == 0 {
+                panel.onFocusLost = { [weak self] in self?.handleFocusLost() }
+            }
+            return panel
+        }
+        panelScreens = screens
     }
 
     private func installKeyEventMonitorIfNeeded() {
@@ -82,35 +140,71 @@ public final class SwitcherPanelController {
         }
     }
 
+    private func installAppDidResignActiveObserverIfNeeded() {
+        guard appDidResignActiveObserver == nil else { return }
+        appDidResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: NSApp,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleFocusLost()
+            }
+        }
+    }
+
+    private func removeAppDidResignActiveObserver() {
+        if let appDidResignActiveObserver {
+            NotificationCenter.default.removeObserver(appDidResignActiveObserver)
+            self.appDidResignActiveObserver = nil
+        }
+    }
+
+    private func handleFocusLost() {
+        guard isVisible, !isHidingProgrammatically else { return }
+        onAction(.focusLost)
+    }
+
     private func handleMonitoredEvent(_ event: NSEvent) -> NSEvent? {
-        guard window.isVisible else { return event }
-        guard event.window == window || NSApp.keyWindow == window else { return event }
-        guard let action = SwitcherKeyboardMapper.action(for: event) else { return event }
+        guard let primaryPanel, primaryPanel.isVisible else { return event }
+        guard event.window == primaryPanel || NSApp.keyWindow == primaryPanel else { return event }
+        guard let action = SwitcherKeyboardMapper.action(for: event, triggerModifier: triggerModifier) else { return event }
         onAction(action)
         return nil
     }
 
-    private func restoreFrameAfterContentUpdate(_ frameBeforeUpdate: NSRect) {
-        guard window.isVisible else { return }
-        window.setFrame(frameBeforeUpdate, display: true)
+    private func restoreFramesAfterContentUpdate(_ framesBeforeUpdate: [NSRect]) {
+        guard isVisible else { return }
+        for (index, frame) in framesBeforeUpdate.enumerated() where panels.indices.contains(index) {
+            panels[index].setFrame(frame, display: true)
+        }
     }
 
-    private func positionNearCenter() {
-        guard let screenFrame = NSScreen.main?.visibleFrame else { return }
-        let fittingHeight = window.contentViewController?.view.fittingSize.height ?? 320
-        let size = NSSize(width: 560, height: max(220, fittingHeight))
-        let origin = NSPoint(
-            x: screenFrame.midX - size.width / 2,
-            y: screenFrame.midY + min(80, screenFrame.height * 0.12) - size.height / 2
+    private func positionPanels(state: SwitcherState, warning: String?) {
+        for (index, panel) in panels.enumerated() {
+            guard let screen = panelScreens[safe: index] else { continue }
+            position(panel: panel, on: screen, itemCount: state.items.count, warning: warning)
+        }
+    }
+
+    private func position(panel: SwitcherPanelWindow, on screen: NSScreen, itemCount: Int, warning: String?) {
+        let frame = SwitcherPanelLayout.panelFrame(
+            itemCount: itemCount,
+            warning: warning,
+            visibleFrame: screen.visibleFrame,
+            fittingSize: panel.contentViewController?.view.fittingSize ?? .zero
         )
-        window.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.setFrame(frame, display: true)
     }
 }
 
-private final class SwitcherPanelWindow: NSPanel {
+private final class SwitcherPanelWindow: NSPanel, NSWindowDelegate {
     var onKeyboardAction: ((SwitcherKeyboardAction) -> Void)?
+    var onFocusLost: (() -> Void)?
+    private let allowsKeyFocus: Bool
 
-    init() {
+    init(allowsKeyFocus: Bool) {
+        self.allowsKeyFocus = allowsKeyFocus
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 320),
             styleMask: [.borderless, .fullSizeContentView],
@@ -125,10 +219,17 @@ private final class SwitcherPanelWindow: NSPanel {
         backgroundColor = .clear
         isOpaque = false
         hasShadow = true
+        ignoresMouseEvents = !allowsKeyFocus
+        delegate = self
     }
 
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeKey: Bool { allowsKeyFocus }
+    override var canBecomeMain: Bool { allowsKeyFocus }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard allowsKeyFocus, isVisible else { return }
+        onFocusLost?()
+    }
 
     override func keyDown(with event: NSEvent) {
         guard let action = SwitcherKeyboardMapper.action(for: event) else {
@@ -139,11 +240,37 @@ private final class SwitcherPanelWindow: NSPanel {
     }
 }
 
+enum SwitcherTriggerModifier: Equatable, Sendable {
+    case option
+    case command
+
+    func isRelevantFlagsChangedEvent(_ event: NSEvent) -> Bool {
+        switch self {
+        case .option:
+            return event.keyCode == 58 || event.keyCode == 61
+        case .command:
+            return event.keyCode == 55 || event.keyCode == 54
+        }
+    }
+
+    func isStillPressed(in flags: NSEvent.ModifierFlags) -> Bool {
+        switch self {
+        case .option:
+            return flags.contains(.option)
+        case .command:
+            return flags.contains(.command)
+        }
+    }
+}
+
 enum SwitcherKeyboardMapper {
-    static func action(for event: NSEvent) -> SwitcherKeyboardAction? {
+    static func action(
+        for event: NSEvent,
+        triggerModifier: SwitcherTriggerModifier = .option
+    ) -> SwitcherKeyboardAction? {
         if event.type == .flagsChanged {
-            guard event.keyCode == 58 || event.keyCode == 61 else { return nil }
-            return event.modifierFlags.contains(.option) ? nil : .modifierReleased
+            guard triggerModifier.isRelevantFlagsChangedEvent(event) else { return nil }
+            return triggerModifier.isStillPressed(in: event.modifierFlags) ? nil : .modifierReleased
         }
 
         switch event.keyCode {
@@ -160,5 +287,23 @@ enum SwitcherKeyboardMapper {
         default:
             return nil
         }
+    }
+}
+
+private extension SwitcherMode {
+    var triggerModifier: SwitcherTriggerModifier {
+        SwitcherTriggerModifier(modifiers: defaultHotkeyDefinition.modifiers)
+    }
+}
+
+private extension SwitcherTriggerModifier {
+    init(modifiers: HotkeyModifiers) {
+        self = modifiers.contains(.command) ? .command : .option
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

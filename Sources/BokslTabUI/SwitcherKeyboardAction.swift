@@ -6,6 +6,7 @@ public enum SwitcherKeyboardAction: Equatable, Sendable {
     case confirm
     case cancel
     case modifierReleased
+    case focusLost
     case select(index: Int)
     case activate(index: Int)
 }

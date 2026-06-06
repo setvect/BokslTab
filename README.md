@@ -127,13 +127,17 @@ swift run BokslTab
 | 동작 | 단축키 |
 | --- | --- |
 | 모든 앱/창 전환 패널 열기 | `Option + Tab` |
-| 활성 앱 창 전환 패널 열기 | `Option + Space` |
+| 활성 앱 창 전환 패널 열기 | `Command + Tab` |
 | 다음 항목 | `Tab`, `↓`, `→` |
 | 이전 항목 | `Shift + Tab`, `↑`, `←` |
 | 선택 항목으로 전환 | `Enter`, `Space` |
 | 클릭 선택 | row 클릭 |
 | 클릭 전환 | row 더블클릭 |
 | 취소 | `Esc` |
+
+`Option + Tab` 패널은 `Option` 키를 떼면 현재 선택 항목으로 전환됩니다. `Command + Tab` 활성 앱 창 패널은 `Command` 키를 떼면 현재 선택 항목으로 전환됩니다.
+
+macOS 기본 앱 전환기와 충돌해 `Command + Tab` 전역 단축키 등록이 실패할 수 있습니다. 이 경우 BokslTab은 종료하지 않고 `Option + Tab` 단축키만 유지하며, 패널 하단에 등록 실패 안내를 표시합니다.
 
 메뉴바에서도 다음 항목을 실행할 수 있습니다.
 
