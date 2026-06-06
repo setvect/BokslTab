@@ -64,7 +64,7 @@ public struct SwitcherPanelView: View {
                 WarningBanner(message: warning, onOpenSettings: onOpenSettings)
             }
 
-            Text("↑↓/Tab 이동 · Enter 전환 · Esc 닫기 · 클릭 선택")
+            Text("↑↓/Tab 이동 · Option 떼면 전환 · Enter 전환 · Esc 닫기")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

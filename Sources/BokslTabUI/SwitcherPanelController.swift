@@ -46,6 +46,7 @@ public final class SwitcherPanelController {
     }
 
     public func update(state: SwitcherState, warning: String?) {
+        let frameBeforeUpdate = window.frame
         window.contentViewController = NSHostingController(
             rootView: SwitcherPanelView(
                 mode: state.mode,
@@ -58,6 +59,7 @@ public final class SwitcherPanelController {
                 onActivateIndex: { [weak self] index in self?.onAction(.activate(index: index)) }
             )
         )
+        restoreFrameAfterContentUpdate(frameBeforeUpdate)
     }
 
     public func hide() {
@@ -67,9 +69,9 @@ public final class SwitcherPanelController {
 
     private func installKeyEventMonitorIfNeeded() {
         guard keyEventMonitor == nil else { return }
-        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
-            return self.handleMonitoredKeyEvent(event)
+            return self.handleMonitoredEvent(event)
         }
     }
 
@@ -80,7 +82,7 @@ public final class SwitcherPanelController {
         }
     }
 
-    private func handleMonitoredKeyEvent(_ event: NSEvent) -> NSEvent? {
+    private func handleMonitoredEvent(_ event: NSEvent) -> NSEvent? {
         guard window.isVisible else { return event }
         guard event.window == window || NSApp.keyWindow == window else { return event }
         guard let action = SwitcherKeyboardMapper.action(for: event) else { return event }
@@ -88,9 +90,15 @@ public final class SwitcherPanelController {
         return nil
     }
 
+    private func restoreFrameAfterContentUpdate(_ frameBeforeUpdate: NSRect) {
+        guard window.isVisible else { return }
+        window.setFrame(frameBeforeUpdate, display: true)
+    }
+
     private func positionNearCenter() {
         guard let screenFrame = NSScreen.main?.visibleFrame else { return }
-        let size = NSSize(width: 560, height: window.contentViewController?.view.fittingSize.height ?? 320)
+        let fittingHeight = window.contentViewController?.view.fittingSize.height ?? 320
+        let size = NSSize(width: 560, height: max(220, fittingHeight))
         let origin = NSPoint(
             x: screenFrame.midX - size.width / 2,
             y: screenFrame.midY + min(80, screenFrame.height * 0.12) - size.height / 2
@@ -133,6 +141,11 @@ private final class SwitcherPanelWindow: NSPanel {
 
 enum SwitcherKeyboardMapper {
     static func action(for event: NSEvent) -> SwitcherKeyboardAction? {
+        if event.type == .flagsChanged {
+            guard event.keyCode == 58 || event.keyCode == 61 else { return nil }
+            return event.modifierFlags.contains(.option) ? nil : .modifierReleased
+        }
+
         switch event.keyCode {
         case 48: // Tab
             return event.modifierFlags.contains(.shift) ? .previous : .next

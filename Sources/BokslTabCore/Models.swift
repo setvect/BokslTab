@@ -76,7 +76,7 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
             if let title = window.title?.nonBlank {
                 return title
             }
-            return app.displayName
+            return "\(app.displayName) 창 \(window.windowID)"
         }
     }
 

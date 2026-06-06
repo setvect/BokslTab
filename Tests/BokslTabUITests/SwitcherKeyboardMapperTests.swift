@@ -10,12 +10,14 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         XCTAssertEqual(SwitcherKeyboardMapper.action(for: keyEvent(keyCode: 126)), .previous)
     }
 
-    func testConfirmAndCancelKeys() {
+    func testConfirmCancelAndModifierReleaseKeys() {
         XCTAssertEqual(SwitcherKeyboardMapper.action(for: keyEvent(keyCode: 36)), .confirm)
         XCTAssertEqual(SwitcherKeyboardMapper.action(for: keyEvent(keyCode: 49)), .confirm)
         XCTAssertEqual(SwitcherKeyboardMapper.action(for: keyEvent(keyCode: 53)), .cancel)
+        XCTAssertNil(SwitcherKeyboardMapper.action(for: flagsChangedEvent(keyCode: 58, modifiers: [.option])))
+        XCTAssertNil(SwitcherKeyboardMapper.action(for: flagsChangedEvent(keyCode: 56, modifiers: [])))
+        XCTAssertEqual(SwitcherKeyboardMapper.action(for: flagsChangedEvent(keyCode: 58, modifiers: [])), .modifierReleased)
     }
-
 
     func testPanelListHeightReservesVisibleRows() {
         XCTAssertEqual(SwitcherPanelLayout.listHeight(itemCount: 0), SwitcherPanelLayout.rowHeight)
@@ -33,6 +35,21 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
     private func keyEvent(keyCode: UInt16, modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
         NSEvent.keyEvent(
             with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: keyCode
+        )!
+    }
+
+    private func flagsChangedEvent(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .flagsChanged,
             location: .zero,
             modifierFlags: modifiers,
             timestamp: 0,

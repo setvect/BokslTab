@@ -161,6 +161,8 @@ final class SwitcherCoordinator {
             activateSelectedItem()
         case .cancel:
             cancelAndRestoreFocus()
+        case .modifierReleased:
+            activateSelectedItem()
         case .select(let index):
             state.select(index: index)
             panelController.update(state: state, warning: currentWarning)
@@ -222,13 +224,6 @@ final class SwitcherCoordinator {
 
     private func permissionWarning(for mode: SwitcherMode) -> String? {
         switch permissionAdvisor.accessibility {
-        case .denied(let reason):
-            return reason
-        case .allowed, .unknown:
-            break
-        }
-
-        switch permissionAdvisor.screenMetadata {
         case .denied(let reason):
             return reason
         case .allowed, .unknown:
