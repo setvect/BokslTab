@@ -127,11 +127,13 @@ enum SwitcherPanelLayout {
     static let baseFontSize: CGFloat = 18
     static let minimumFontSize: CGFloat = 11
     static let screenEdgeMargin: CGFloat = 12
+    static let widthScale: CGFloat = 2.0 / 3.0
     static let defaultAvailableSize = CGSize(width: 1280, height: 800)
 
     static func metrics(itemCount: Int, availableSize: CGSize) -> SwitcherPanelMetrics {
         let safeCount = max(itemCount, 1)
-        let desiredPanelWidth = min(max(560, availableSize.width * 0.90), 1320)
+        let fullSizePanelWidth = min(max(560, availableSize.width * 0.90), 1320)
+        let desiredPanelWidth = fullSizePanelWidth * widthScale
         let maxPanelWidth = max(1, availableSize.width - screenEdgeMargin * 2)
         let panelWidth = min(desiredPanelWidth, maxPanelWidth)
         let maxPanelHeight = max(1, availableSize.height - screenEdgeMargin * 2)

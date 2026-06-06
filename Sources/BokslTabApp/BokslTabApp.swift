@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        BokslTabDiagnosticLog.write("app.launch pid=\(getpid()) logPath=\(BokslTabDiagnosticLog.filePath)")
         NSApp.setActivationPolicy(.accessory)
         let coordinator = SwitcherCoordinator(
             runningAppProvider: MacOSRunningAppProvider(),
@@ -47,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appActivator: MacOSAppActivator(),
             windowActivator: MacOSWindowActivator(),
             permissionAdvisor: MacOSPermissionAdvisor(),
-            hotkeyService: CarbonGlobalHotkeyService()
+            hotkeyService: PrioritizedGlobalHotkeyService()
         )
         self.coordinator = coordinator
         coordinator.start()
@@ -127,7 +128,7 @@ final class SwitcherCoordinator {
         do {
             try registerHotkeys(definitions)
         } catch {
-            reportDiagnostic("전역 단축키 등록 실패: \(error)")
+            reportStartupDiagnostic("전역 단축키 등록 실패: \(error)")
             retryPrimaryHotkeyIfActiveAppHotkeyConflicted(
                 error: error,
                 primaryDefinition: allAppsDefinition,
@@ -137,7 +138,9 @@ final class SwitcherCoordinator {
     }
 
     private func registerHotkeys(_ definitions: [HotkeyDefinition]) throws {
+        BokslTabDiagnosticLog.write("coordinator.registerHotkeys definitions=\(definitions.map(\.description).joined(separator: ", "))")
         try hotkeyService.start(definitions: definitions) { [weak self] mode in
+            BokslTabDiagnosticLog.write("coordinator.hotkeyReceived mode=\(mode.rawValue)")
             DispatchQueue.main.async {
                 self?.show(mode: mode)
             }
@@ -178,7 +181,7 @@ final class SwitcherCoordinator {
             try registerHotkeys([primaryDefinition])
             reportActiveAppHotkeyFallback(conflictingDefinition)
         } catch {
-            reportDiagnostic("기본 단축키 대체 등록 실패: \(error)")
+            reportStartupDiagnostic("기본 단축키 대체 등록 실패: \(error)")
         }
     }
 
@@ -189,10 +192,12 @@ final class SwitcherCoordinator {
     }
 
     func stop() {
+        BokslTabDiagnosticLog.write("coordinator.stop")
         hotkeyService.stop()
     }
 
     func show(mode: SwitcherMode) {
+        BokslTabDiagnosticLog.write("coordinator.show requested mode=\(mode.rawValue) panelVisible=\(panelController.isVisible)")
         if panelController.isVisible, state.mode == mode {
             state.moveNext()
             panelController.update(state: state, warning: currentWarning)
@@ -303,6 +308,11 @@ final class SwitcherCoordinator {
         case .safeFailure(let reason):
             reportDiagnostic("전환 실패: \(reason)")
         }
+    }
+
+    private func reportStartupDiagnostic(_ message: String) {
+        startupWarning = message
+        reportDiagnostic(message)
     }
 
     private func reportDiagnostic(_ message: String) {

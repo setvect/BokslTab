@@ -137,7 +137,7 @@ swift run BokslTab
 
 `Option + Tab` 패널은 `Option` 키를 떼면 현재 선택 항목으로 전환됩니다. `Command + Tab` 활성 앱 창 패널은 `Command` 키를 떼면 현재 선택 항목으로 전환됩니다.
 
-macOS 기본 앱 전환기와 충돌해 `Command + Tab` 전역 단축키 등록이 실패할 수 있습니다. 이 경우 BokslTab은 종료하지 않고 `Option + Tab` 단축키만 유지하며, 패널 하단에 등록 실패 안내를 표시합니다.
+`Command + Tab`은 macOS 기본 앱 전환기보다 BokslTab이 먼저 처리하도록 CoreGraphics event tap을 우선 사용합니다. event tap을 만들 수 없는 환경에서는 기존 전역 단축키 등록 방식으로 fallback을 시도하고, 둘 다 실패하면 패널 하단에 등록 실패 안내를 표시합니다.
 
 메뉴바에서도 다음 항목을 실행할 수 있습니다.
 
@@ -152,6 +152,7 @@ BokslTab은 다른 앱의 창을 찾고 전환을 시도하기 때문에 macOS �
 ### Accessibility / 손쉬운 사용
 
 창 단위 전환을 시도하려면 Accessibility 권한이 필요합니다.
+`Command + Tab`을 macOS 기본 앱 전환기보다 먼저 처리하는 event tap 경로도 이 권한의 영향을 받을 수 있습니다.
 
 설정 경로:
 
@@ -352,8 +353,16 @@ PKG를 배포하려면 `Developer ID Installer` 인증서로 installer package�
 ### 단축키가 동작하지 않음
 
 - 다른 앱이 같은 단축키를 선점했을 수 있습니다.
+- `Command + Tab` 우선 처리는 event tap 생성이 필요합니다. 손쉬운 사용 권한을 허용한 뒤 앱을 재실행합니다.
 - 터미널/실행 파일을 종료 후 다시 실행합니다.
-- 콘솔 stderr에 `전역 단축키 등록 실패` 메시지가 있는지 확인합니다.
+- 콘솔 stderr에 `전역 단축키 등록 실패` 또는 `활성 앱 단축키 ... 등록 실패` 메시지가 있는지 확인합니다.
+- 단축키 진단 로그를 확인합니다.
+
+```bash
+tail -f ~/Library/Logs/BokslTab/BokslTab.log
+```
+
+`Command + Tab`을 눌렀을 때 `eventtap.keyDown`, `eventtap.trigger`, `coordinator.hotkeyReceived`가 순서대로 찍히는지 확인합니다. `eventtap.start failed`가 있으면 event tap 생성 자체가 실패한 것이고, `eventtap.start succeeded`만 있고 `eventtap.keyDown`이 없으면 macOS가 해당 이벤트를 BokslTab event tap까지 전달하지 않는 상태입니다.
 
 ### 손쉬운 사용 목록에 BokslTab이 없음
 

@@ -77,6 +77,14 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         XCTAssertLessThanOrEqual(metrics.panelWidth, smallScreen.width - SwitcherPanelLayout.screenEdgeMargin * 2)
     }
 
+    func testPanelMetricsScaleWidthToTwoThirdsOfPreviousFullWidth() {
+        let screen = CGSize(width: 1280, height: 800)
+        let previousFullWidth = min(max(CGFloat(560), screen.width * 0.90), CGFloat(1320))
+        let metrics = SwitcherPanelLayout.metrics(itemCount: 7, availableSize: screen)
+
+        XCTAssertEqual(metrics.panelWidth, previousFullWidth * SwitcherPanelLayout.widthScale, accuracy: 0.1)
+    }
+
     func testPanelMetricsClampWidthToAvailableScreen() {
         let narrowScreen = CGSize(width: 320, height: 800)
         let metrics = SwitcherPanelLayout.metrics(itemCount: 7, availableSize: narrowScreen)
