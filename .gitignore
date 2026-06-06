@@ -1,1 +1,6 @@
 temp/
+.build/
+.swiftpm/
+DerivedData/
+
+.vscode/
