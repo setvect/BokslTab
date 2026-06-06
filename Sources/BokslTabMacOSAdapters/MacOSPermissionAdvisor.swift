@@ -6,6 +6,13 @@ import Foundation
 public final class MacOSPermissionAdvisor: PermissionAdvising {
     public init() {}
 
+    @discardableResult
+    public func requestAccessibilityPrompt() -> Bool {
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        let options = [promptKey: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
     public var accessibility: PermissionState {
         AXIsProcessTrusted()
             ? .allowed

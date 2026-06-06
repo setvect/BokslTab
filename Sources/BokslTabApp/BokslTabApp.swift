@@ -86,10 +86,12 @@ final class SwitcherCoordinator {
     private let appActivator: AppActivating
     private let windowActivator: WindowActivating
     private let permissionAdvisor: PermissionAdvising
+    private let macOSPermissionAdvisor: MacOSPermissionAdvisor?
     private let hotkeyService: GlobalHotkeyServicing
     private lazy var panelController = SwitcherPanelController(
         iconProvider: { [weak self] item in self?.icon(for: item.app) },
-        onKeyboardAction: { [weak self] action in self?.handle(action: action) }
+        onKeyboardAction: { [weak self] action in self?.handle(action: action) },
+        onOpenSettings: { [weak self] in self?.openPermissionSettings() }
     )
 
     private var state = SwitcherState(mode: .allAppsAndWindows, items: [])
@@ -109,6 +111,7 @@ final class SwitcherCoordinator {
         self.appActivator = appActivator
         self.windowActivator = windowActivator
         self.permissionAdvisor = permissionAdvisor
+        self.macOSPermissionAdvisor = permissionAdvisor as? MacOSPermissionAdvisor
         self.hotkeyService = hotkeyService
     }
 
@@ -241,6 +244,21 @@ final class SwitcherCoordinator {
     private func reportDiagnostic(_ message: String) {
         currentWarning = message
         fputs("BokslTab: \(message)\n", stderr)
+    }
+
+    private func openPermissionSettings() {
+        _ = macOSPermissionAdvisor?.requestAccessibilityPrompt()
+        let accessibilityURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        if !NSWorkspace.shared.open(accessibilityURL) {
+            NSWorkspace.shared.openApplication(
+                at: URL(fileURLWithPath: "/System/Applications/System Settings.app"),
+                configuration: NSWorkspace.OpenConfiguration()
+            ) { _, error in
+                if let error {
+                    fputs("BokslTab: 시스템 설정 열기 실패: \(error)\n", stderr)
+                }
+            }
+        }
     }
 
     private func icon(for app: AppIdentity) -> NSImage? {

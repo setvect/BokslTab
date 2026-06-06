@@ -6,12 +6,15 @@ import SwiftUI
 public final class SwitcherPanelController {
     private let window: SwitcherPanelWindow
     private let iconProvider: (SwitcherItem) -> NSImage?
+    private let onOpenSettings: () -> Void
 
     public init(
         iconProvider: @escaping (SwitcherItem) -> NSImage?,
-        onKeyboardAction: @escaping (SwitcherKeyboardAction) -> Void
+        onKeyboardAction: @escaping (SwitcherKeyboardAction) -> Void,
+        onOpenSettings: @escaping () -> Void
     ) {
         self.iconProvider = iconProvider
+        self.onOpenSettings = onOpenSettings
         self.window = SwitcherPanelWindow()
         self.window.onKeyboardAction = onKeyboardAction
     }
@@ -38,7 +41,8 @@ public final class SwitcherPanelController {
                 items: state.items,
                 selectedIndex: state.selectedIndex,
                 warning: warning,
-                iconProvider: iconProvider
+                iconProvider: iconProvider,
+                onOpenSettings: onOpenSettings
             )
         )
     }

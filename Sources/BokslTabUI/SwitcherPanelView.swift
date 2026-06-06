@@ -8,19 +8,22 @@ public struct SwitcherPanelView: View {
     private let selectedIndex: Int
     private let warning: String?
     private let iconProvider: (SwitcherItem) -> NSImage?
+    private let onOpenSettings: (() -> Void)?
 
     public init(
         mode: SwitcherMode,
         items: [SwitcherItem],
         selectedIndex: Int,
         warning: String?,
-        iconProvider: @escaping (SwitcherItem) -> NSImage?
+        iconProvider: @escaping (SwitcherItem) -> NSImage?,
+        onOpenSettings: (() -> Void)? = nil
     ) {
         self.mode = mode
         self.items = items
         self.selectedIndex = selectedIndex
         self.warning = warning
         self.iconProvider = iconProvider
+        self.onOpenSettings = onOpenSettings
     }
 
     public var body: some View {
@@ -45,10 +48,7 @@ public struct SwitcherPanelView: View {
             }
 
             if let warning {
-                Text(warning)
-                    .font(.caption)
-                    .foregroundStyle(.yellow)
-                    .lineLimit(2)
+                WarningBanner(message: warning, onOpenSettings: onOpenSettings)
             }
 
             Text("↑↓/Tab 이동 · Enter 전환 · Esc 닫기")
@@ -78,6 +78,28 @@ public struct SwitcherPanelView: View {
             .font(.body)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 96)
+    }
+}
+
+private struct WarningBanner: View {
+    let message: String
+    let onOpenSettings: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.yellow)
+                .lineLimit(2)
+
+            Spacer(minLength: 8)
+
+            if let onOpenSettings {
+                Button("설정 열기", action: onOpenSettings)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+        }
     }
 }
 
