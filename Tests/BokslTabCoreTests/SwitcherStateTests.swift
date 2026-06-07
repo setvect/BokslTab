@@ -72,7 +72,7 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertEqual(item.mruProjectedIDs, ["window:10:1", "app:1"])
     }
 
-    func testMRUOrderingSelectsPreviousWindowBeforeCurrentWindow() {
+    func testMRUOrderingShowsCurrentFirstAndSelectsPreviousByDefault() {
         let chrome = AppIdentity(processIdentifier: 1, localizedName: "Chrome")
         let code = AppIdentity(processIdentifier: 2, localizedName: "Code")
         let terminal = AppIdentity(processIdentifier: 3, localizedName: "Terminal")
@@ -90,7 +90,18 @@ final class SwitcherStateTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(ordered.map(\.id), [previous.id, older.id, current.id])
+        XCTAssertEqual(ordered.map(\.id), [current.id, previous.id, older.id])
+        XCTAssertEqual(
+            SwitcherMRUOrderer.defaultSelectedIndex(
+                orderedItems: ordered,
+                context: SwitcherMRUOrderingContext(
+                    orderedItemIDs: [current.id, previous.id, older.id],
+                    currentItemID: current.id,
+                    sourceDescription: "test"
+                )
+            ),
+            1
+        )
     }
 
     func testMRUOrderingWorksForActiveAppWindows() {
@@ -108,7 +119,18 @@ final class SwitcherStateTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(ordered.map(\.title), ["Previous", "Older", "Current"])
+        XCTAssertEqual(ordered.map(\.title), ["Current", "Previous", "Older"])
+        XCTAssertEqual(
+            SwitcherMRUOrderer.defaultSelectedIndex(
+                orderedItems: ordered,
+                context: SwitcherMRUOrderingContext(
+                    orderedItemIDs: [current.id, previous.id, older.id],
+                    currentItemID: current.id,
+                    sourceDescription: "test"
+                )
+            ),
+            1
+        )
     }
 
     func testMRUOrderingFallsBackToTitleSortWithoutMRUInformation() {
@@ -157,6 +179,28 @@ final class SwitcherStateTests: XCTestCase {
         )
 
         XCTAssertEqual(ordered.map(\.title), ["Second", "First"])
+        XCTAssertEqual(
+            SwitcherMRUOrderer.defaultSelectedIndex(
+                orderedItems: ordered,
+                context: SwitcherMRUOrderingContext(
+                    orderedItemIDs: [second.id, first.id],
+                    currentItemID: "window:999:999",
+                    sourceDescription: "test"
+                )
+            ),
+            0
+        )
+    }
+
+    func testMRUDefaultSelectionFallsBackToFirstItemForFallbackOrdering() {
+        let app = AppIdentity(processIdentifier: 1, localizedName: "App")
+        let beta = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 2, ownerProcessIdentifier: 1, title: "Beta")))
+        let alpha = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 1, ownerProcessIdentifier: 1, title: "Alpha")))
+        let context = SwitcherMRUOrderingContext.fallback(reason: "test")
+        let ordered = SwitcherMRUOrderer.order(items: [beta, alpha], context: context)
+
+        XCTAssertEqual(ordered.map(\.title), ["Alpha", "Beta"])
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 0)
     }
 
     func testMRUOrderingDoesNotDropDuplicateItemIDs() {

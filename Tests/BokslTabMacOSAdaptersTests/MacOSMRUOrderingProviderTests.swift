@@ -46,7 +46,8 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
 
         XCTAssertEqual(context.orderedItemIDs, [current.id, previousAppFallback.id])
         XCTAssertEqual(context.currentItemID, current.id)
-        XCTAssertEqual(ordered.map(\.id), [previousAppFallback.id, current.id])
+        XCTAssertEqual(ordered.map(\.id), [current.id, previousAppFallback.id])
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
     func testProviderUsesActivationHistoryBeforeCoreGraphicsFallbackOrder() {
@@ -71,7 +72,8 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(context.orderedItemIDs, [current.id, previous.id, older.id])
         XCTAssertEqual(context.currentItemID, current.id)
         XCTAssertEqual(context.sourceDescription, "workspace-activation-history+cg-window-list-front-to-back")
-        XCTAssertEqual(ordered.map(\.title), ["Previous", "Older", "Current"])
+        XCTAssertEqual(ordered.map(\.title), ["Current", "Previous", "Older"])
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
     func testProviderFallsBackWhenWindowInfoIsUnavailable() {

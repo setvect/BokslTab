@@ -64,12 +64,25 @@ public enum SwitcherMRUOrderer {
         let knownIDs = uniqueIDs(context.orderedItemIDs).filter { itemsByID[$0] != nil }
         guard !knownIDs.isEmpty else { return titleSortedItems }
 
-        let mruCandidateIDs = candidateIDsAfterCurrent(knownIDs: knownIDs, currentItemID: context.currentItemID)
+        let mruCandidateIDs = currentFirstIDs(knownIDs: knownIDs, currentItemID: context.currentItemID)
         let knownIDSet = Set(mruCandidateIDs)
         let knownItems = mruCandidateIDs.flatMap { itemsByID[$0] ?? [] }
         let unknownItems = titleSortedItems.filter { !knownIDSet.contains($0.id) }
 
         return knownItems + unknownItems
+    }
+
+    public static func defaultSelectedIndex(
+        orderedItems: [SwitcherItem],
+        context: SwitcherMRUOrderingContext
+    ) -> Int {
+        guard orderedItems.count > 1,
+              !context.isFallback,
+              let currentItemID = context.currentItemID,
+              orderedItems.first?.id == currentItemID
+        else { return 0 }
+
+        return 1
     }
 
     public static func diagnostics(
@@ -102,7 +115,7 @@ public enum SwitcherMRUOrderer {
         }
     }
 
-    private static func candidateIDsAfterCurrent(
+    private static func currentFirstIDs(
         knownIDs: [String],
         currentItemID: String?
     ) -> [String] {
@@ -110,8 +123,9 @@ public enum SwitcherMRUOrderer {
               let currentIndex = knownIDs.firstIndex(of: currentItemID)
         else { return knownIDs }
 
-        let afterCurrent = knownIDs[(currentIndex + 1)...]
-        let throughCurrent = knownIDs[...currentIndex]
-        return Array(afterCurrent + throughCurrent)
+        var ids = knownIDs
+        ids.remove(at: currentIndex)
+        ids.insert(currentItemID, at: 0)
+        return ids
     }
 }

@@ -220,7 +220,12 @@ final class SwitcherCoordinator {
         }
 
         rememberPreviousFrontmostApp()
-        state = SwitcherState(mode: mode, items: items(for: mode))
+        let presentation = presentation(for: mode)
+        state = SwitcherState(
+            mode: mode,
+            items: presentation.items,
+            selectedIndex: presentation.selectedIndex
+        )
         currentWarning = permissionWarning(for: mode) ?? startupWarning
         panelController.show(state: state, warning: currentWarning)
     }
@@ -304,7 +309,12 @@ final class SwitcherCoordinator {
         previousFrontmostApp = app
     }
 
-    private func items(for mode: SwitcherMode) -> [SwitcherItem] {
+    private struct SwitcherPresentation {
+        let items: [SwitcherItem]
+        let selectedIndex: Int
+    }
+
+    private func presentation(for mode: SwitcherMode) -> SwitcherPresentation {
         switch mode {
         case .allAppsAndWindows:
             let items = SwitcherItemComposer.composeAllAppsAndWindows(
@@ -314,7 +324,9 @@ final class SwitcherCoordinator {
             )
             return orderForMRU(mode: mode, items: items)
         case .activeAppWindows:
-            guard let app = runningAppProvider.frontmostApp() else { return [] }
+            guard let app = runningAppProvider.frontmostApp() else {
+                return SwitcherPresentation(items: [], selectedIndex: 0)
+            }
             let items = SwitcherItemComposer.composeActiveAppWindows(
                 app: app,
                 windows: windowCatalogProvider.windows(for: app)
@@ -323,14 +335,18 @@ final class SwitcherCoordinator {
         }
     }
 
-    private func orderForMRU(mode: SwitcherMode, items: [SwitcherItem]) -> [SwitcherItem] {
+    private func orderForMRU(mode: SwitcherMode, items: [SwitcherItem]) -> SwitcherPresentation {
         let context = mruOrderingProvider.orderingContext(for: mode, items: items)
         let orderedItems = SwitcherMRUOrderer.order(items: items, context: context)
+        let selectedIndex = SwitcherMRUOrderer.defaultSelectedIndex(
+            orderedItems: orderedItems,
+            context: context
+        )
         let diagnostics = SwitcherMRUOrderer.diagnostics(items: items, context: context)
         BokslTabDiagnosticLog.write(
-            "mru.order mode=\(mode.rawValue) source=\(context.sourceDescription) fallback=\(context.fallbackReason ?? "none") partialFallback=\(diagnostics.partialFallbackReason ?? "none") items=\(items.count) ordered=\(orderedItems.count) matched=\(diagnostics.matchedItemCount) unmatched=\(diagnostics.unmatchedItemCount) current=\(context.currentItemID ?? "none")"
+            "mru.order mode=\(mode.rawValue) source=\(context.sourceDescription) fallback=\(context.fallbackReason ?? "none") partialFallback=\(diagnostics.partialFallbackReason ?? "none") items=\(items.count) ordered=\(orderedItems.count) selectedIndex=\(selectedIndex) matched=\(diagnostics.matchedItemCount) unmatched=\(diagnostics.unmatchedItemCount) current=\(context.currentItemID ?? "none")"
         )
-        return orderedItems
+        return SwitcherPresentation(items: orderedItems, selectedIndex: selectedIndex)
     }
 
     private func permissionWarning(for mode: SwitcherMode) -> String? {
