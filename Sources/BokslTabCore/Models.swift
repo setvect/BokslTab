@@ -61,9 +61,12 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
         } else {
             switch kind {
             case .app:
-                self.id = "app:\(app.processIdentifier)"
+                self.id = SwitcherItem.appID(processIdentifier: app.processIdentifier)
             case .window(let window):
-                self.id = "window:\(window.windowID):\(window.ownerProcessIdentifier)"
+                self.id = SwitcherItem.windowID(
+                    windowID: window.windowID,
+                    ownerProcessIdentifier: window.ownerProcessIdentifier
+                )
             }
         }
     }
@@ -92,6 +95,26 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
     public var isWindow: Bool {
         if case .window = kind { return true }
         return false
+    }
+
+    public var mruProjectedIDs: [String] {
+        switch kind {
+        case .app:
+            return [id]
+        case .window:
+            return [
+                id,
+                SwitcherItem.appID(processIdentifier: app.processIdentifier)
+            ]
+        }
+    }
+
+    public static func appID(processIdentifier: Int32) -> String {
+        "app:\(processIdentifier)"
+    }
+
+    public static func windowID(windowID: UInt32, ownerProcessIdentifier: Int32) -> String {
+        "window:\(windowID):\(ownerProcessIdentifier)"
     }
 }
 

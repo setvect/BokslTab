@@ -137,6 +137,8 @@ swift run BokslTab
 
 `Command + Tab` 모든 앱/창 패널은 `Command` 키를 떼면 현재 선택 항목으로 전환됩니다. `Option + Tab` 활성 앱 창 패널은 `Option` 키를 떼면 현재 선택 항목으로 전환됩니다.
 
+전환 목록은 AltTab/Windows Alt+Tab에 가까운 MRU(Most Recently Used) 순서를 목표로 합니다. MVP에서는 앱 실행 중 `NSWorkspace` 활성화 이력을 우선 기록하고, macOS CoreGraphics 창 목록의 front-to-back 순서를 보조 MRU 근사치로 사용해 현재 창/앱이 아니라 직전 사용 항목이 기본 선택되도록 정렬합니다. 창 항목은 `window:<id>:<pid>`, 창이 없는 앱 fallback 항목은 같은 PID의 `app:<pid>`로 매칭을 시도합니다. MRU 정보를 얻을 수 없거나 일부 항목과 매칭되지 않으면 crash 없이 기존 제목순 fallback을 사용하며, 사용된 경로는 `mru.order` 진단 로그로 확인할 수 있습니다.
+
 `Command + Tab`은 macOS 기본 앱 전환기보다 BokslTab이 먼저 처리하도록 앱 실행 중 macOS native symbolic hotkey(`Cmd+Tab`, `Cmd+Shift+Tab`)를 임시 비활성화한 뒤 Carbon 전역 단축키로 등록합니다. 앱이 정상 종료되면 기존 native hotkey 상태를 복원합니다. native override가 실패하면 CoreGraphics HID event tap, 마지막으로 Carbon 등록 fallback을 순서대로 시도하고, 모두 실패하면 패널 하단에 등록 실패 안내를 표시합니다.
 
 메뉴바에서도 다음 항목을 실행할 수 있습니다.
@@ -375,6 +377,16 @@ coordinator.hotkeyReceived mode=allAppsAndWindows
 ```
 
 `native-hotkey.symbols unavailable`, `native-hotkey.disable failed`, `hotkey.priority.eventtap start failed`가 보이면 native override 또는 event tap fallback이 실패한 것입니다. 이 경우 로그의 다음 `carbon.register failed`/`carbon.register succeeded` 결과로 등록 상태를 확인합니다.
+
+MRU 정렬 상태는 다음 로그로 확인합니다.
+
+```text
+mru.order mode=allAppsAndWindows source=workspace-activation-history+cg-window-list-front-to-back fallback=none partialFallback=none ...
+mru.order mode=allAppsAndWindows source=cg-window-list-front-to-back fallback=none partialFallback=none ...
+mru.order mode=activeAppWindows source=cg-window-list-front-to-back fallback=none partialFallback=none ...
+```
+
+`fallback=cg-window-list-unavailable` 또는 `fallback=no-matching-front-to-back-windows`가 보이면 MRU source를 사용할 수 없어 제목순 fallback이 적용된 것입니다. `partialFallback=title-sort-unmatched-items`가 보이면 MRU에 매칭된 항목은 먼저 정렬하고, 매칭되지 않은 항목만 제목순으로 뒤에 붙인 상태입니다.
 
 ### macOS 기본 Cmd+Tab 복구
 

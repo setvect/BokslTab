@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appActivator: MacOSAppActivator(),
             windowActivator: MacOSWindowActivator(),
             permissionAdvisor: MacOSPermissionAdvisor(),
+            mruOrderingProvider: MacOSMRUOrderingProvider(),
             hotkeyService: PrioritizedGlobalHotkeyService()
         )
         self.coordinator = coordinator
@@ -99,6 +100,7 @@ final class SwitcherCoordinator {
     private let windowActivator: WindowActivating
     private let permissionAdvisor: PermissionAdvising
     private let macOSPermissionAdvisor: MacOSPermissionAdvisor?
+    private let mruOrderingProvider: SwitcherMRUOrderingProviding
     private let hotkeyService: GlobalHotkeyServicing
     private lazy var panelController = SwitcherPanelController(
         iconProvider: { [weak self] item in self?.icon(for: item.app) },
@@ -117,6 +119,7 @@ final class SwitcherCoordinator {
         appActivator: AppActivating,
         windowActivator: WindowActivating,
         permissionAdvisor: PermissionAdvising,
+        mruOrderingProvider: SwitcherMRUOrderingProviding,
         hotkeyService: GlobalHotkeyServicing
     ) {
         self.runningAppProvider = runningAppProvider
@@ -125,6 +128,7 @@ final class SwitcherCoordinator {
         self.windowActivator = windowActivator
         self.permissionAdvisor = permissionAdvisor
         self.macOSPermissionAdvisor = permissionAdvisor as? MacOSPermissionAdvisor
+        self.mruOrderingProvider = mruOrderingProvider
         self.hotkeyService = hotkeyService
     }
 
@@ -261,7 +265,23 @@ final class SwitcherCoordinator {
         case .window(let window):
             result = windowActivator.activate(window: window, app: item.app)
         }
+        recordActivatedItem(item, result: result)
         reportSwitchResult(result)
+    }
+
+    private func recordActivatedItem(_ item: SwitcherItem, result: SwitchResult) {
+        guard let historyRecorder = mruOrderingProvider as? SwitcherMRUHistoryRecording else { return }
+
+        switch result {
+        case .exactWindowSuccess:
+            historyRecorder.recordActivatedItem(item)
+        case .appActivationSuccess:
+            historyRecorder.recordActivatedApp(item.app)
+        case .limitedAppFallbackSuccess:
+            historyRecorder.recordActivatedApp(item.app)
+        case .safeFailure:
+            return
+        }
     }
 
     private func cancelAndRestoreFocus() {
@@ -287,18 +307,30 @@ final class SwitcherCoordinator {
     private func items(for mode: SwitcherMode) -> [SwitcherItem] {
         switch mode {
         case .allAppsAndWindows:
-            return SwitcherItemComposer.composeAllAppsAndWindows(
+            let items = SwitcherItemComposer.composeAllAppsAndWindows(
                 apps: runningAppProvider.runningApps(),
                 windows: windowCatalogProvider.windowsForAllApps(),
                 currentProcessIdentifier: getpid()
             )
+            return orderForMRU(mode: mode, items: items)
         case .activeAppWindows:
             guard let app = runningAppProvider.frontmostApp() else { return [] }
-            return SwitcherItemComposer.composeActiveAppWindows(
+            let items = SwitcherItemComposer.composeActiveAppWindows(
                 app: app,
                 windows: windowCatalogProvider.windows(for: app)
             )
+            return orderForMRU(mode: mode, items: items)
         }
+    }
+
+    private func orderForMRU(mode: SwitcherMode, items: [SwitcherItem]) -> [SwitcherItem] {
+        let context = mruOrderingProvider.orderingContext(for: mode, items: items)
+        let orderedItems = SwitcherMRUOrderer.order(items: items, context: context)
+        let diagnostics = SwitcherMRUOrderer.diagnostics(items: items, context: context)
+        BokslTabDiagnosticLog.write(
+            "mru.order mode=\(mode.rawValue) source=\(context.sourceDescription) fallback=\(context.fallbackReason ?? "none") partialFallback=\(diagnostics.partialFallbackReason ?? "none") items=\(items.count) ordered=\(orderedItems.count) matched=\(diagnostics.matchedItemCount) unmatched=\(diagnostics.unmatchedItemCount) current=\(context.currentItemID ?? "none")"
+        )
+        return orderedItems
     }
 
     private func permissionWarning(for mode: SwitcherMode) -> String? {
