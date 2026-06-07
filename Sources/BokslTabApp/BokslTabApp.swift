@@ -35,6 +35,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var coordinator: SwitcherCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--restore-native-command-tab") {
+            runNativeCommandTabRestoreAndExit()
+            return
+        }
+
         if CommandLine.arguments.contains("--smoke-test") {
             runSmokeTestAndExit()
             return
@@ -76,6 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("switcherItems=\(composedItems.count)")
         print("accessibility=\(permissionAdvisor.accessibility)")
         print("screenMetadata=\(permissionAdvisor.screenMetadata)")
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func runNativeCommandTabRestoreAndExit() {
+        let succeeded = NativeCommandTabHotkeyRecovery.enableCommandTabPair()
+        print("nativeCommandTabRestore=\(succeeded ? "succeeded" : "failed")")
         NSApplication.shared.terminate(nil)
     }
 }

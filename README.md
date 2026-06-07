@@ -137,7 +137,7 @@ swift run BokslTab
 
 `Option + Tab` 패널은 `Option` 키를 떼면 현재 선택 항목으로 전환됩니다. `Command + Tab` 활성 앱 창 패널은 `Command` 키를 떼면 현재 선택 항목으로 전환됩니다.
 
-`Command + Tab`은 macOS 기본 앱 전환기보다 BokslTab이 먼저 처리하도록 CoreGraphics event tap을 우선 사용합니다. event tap을 만들 수 없는 환경에서는 기존 전역 단축키 등록 방식으로 fallback을 시도하고, 둘 다 실패하면 패널 하단에 등록 실패 안내를 표시합니다.
+`Command + Tab`은 macOS 기본 앱 전환기보다 BokslTab이 먼저 처리하도록 앱 실행 중 macOS native symbolic hotkey(`Cmd+Tab`, `Cmd+Shift+Tab`)를 임시 비활성화한 뒤 Carbon 전역 단축키로 등록합니다. 앱이 정상 종료되면 기존 native hotkey 상태를 복원합니다. native override가 실패하면 CoreGraphics HID event tap, 마지막으로 Carbon 등록 fallback을 순서대로 시도하고, 모두 실패하면 패널 하단에 등록 실패 안내를 표시합니다.
 
 메뉴바에서도 다음 항목을 실행할 수 있습니다.
 
@@ -152,7 +152,7 @@ BokslTab은 다른 앱의 창을 찾고 전환을 시도하기 때문에 macOS �
 ### Accessibility / 손쉬운 사용
 
 창 단위 전환을 시도하려면 Accessibility 권한이 필요합니다.
-`Command + Tab`을 macOS 기본 앱 전환기보다 먼저 처리하는 event tap 경로도 이 권한의 영향을 받을 수 있습니다.
+`Command + Tab` fallback 경로인 HID event tap도 이 권한의 영향을 받을 수 있습니다.
 
 설정 경로:
 
@@ -353,7 +353,8 @@ PKG를 배포하려면 `Developer ID Installer` 인증서로 installer package�
 ### 단축키가 동작하지 않음
 
 - 다른 앱이 같은 단축키를 선점했을 수 있습니다.
-- `Command + Tab` 우선 처리는 event tap 생성이 필요합니다. 손쉬운 사용 권한을 허용한 뒤 앱을 재실행합니다.
+- `Command + Tab` 우선 처리는 macOS native symbolic hotkey를 임시로 끈 뒤 Carbon 전역 단축키로 등록합니다. 이 경로가 실패하면 HID event tap fallback을 시도합니다.
+- 손쉬운 사용 권한을 허용한 뒤 앱을 재실행합니다.
 - 터미널/실행 파일을 종료 후 다시 실행합니다.
 - 콘솔 stderr에 `전역 단축키 등록 실패` 또는 `활성 앱 단축키 ... 등록 실패` 메시지가 있는지 확인합니다.
 - 단축키 진단 로그를 확인합니다.
@@ -362,7 +363,36 @@ PKG를 배포하려면 `Developer ID Installer` 인증서로 installer package�
 tail -f ~/Library/Logs/BokslTab/BokslTab.log
 ```
 
-`Command + Tab`을 눌렀을 때 `eventtap.keyDown`, `eventtap.trigger`, `coordinator.hotkeyReceived`가 순서대로 찍히는지 확인합니다. `eventtap.start failed`가 있으면 event tap 생성 자체가 실패한 것이고, `eventtap.start succeeded`만 있고 `eventtap.keyDown`이 없으면 macOS가 해당 이벤트를 BokslTab event tap까지 전달하지 않는 상태입니다.
+`Command + Tab`을 눌렀을 때 정상 native override 경로에서는 다음 로그 흐름을 확인합니다.
+
+```text
+native-hotkey.disable id=1 ... result=0
+native-hotkey.disable id=2 ... result=0
+hotkey.priority.nativeCommandTab active; using Carbon for all definitions
+carbon.register succeeded ... definition=mode=activeAppWindows, hotkey=Cmd+keyCode(48)
+carbon.hotkey trigger ... mode=activeAppWindows
+coordinator.hotkeyReceived mode=activeAppWindows
+```
+
+`native-hotkey.symbols unavailable`, `native-hotkey.disable failed`, `hotkey.priority.eventtap start failed`가 보이면 native override 또는 event tap fallback이 실패한 것입니다. 이 경우 로그의 다음 `carbon.register failed`/`carbon.register succeeded` 결과로 등록 상태를 확인합니다.
+
+### macOS 기본 Cmd+Tab 복구
+
+BokslTab은 `Command + Tab`을 가로채기 위해 macOS private SkyLight API로 native symbolic hotkey를 앱 실행 중 임시 비활성화합니다. 정상 종료하면 시작 시점의 상태로 복원하지만, 강제 종료나 crash가 발생하면 macOS 기본 `Cmd+Tab` 상태가 남아 있을 수 있습니다.
+
+이때는 아래 명령으로 macOS 기본 `Cmd+Tab`/`Cmd+Shift+Tab`을 강제로 다시 켭니다.
+
+```bash
+.build/debug/BokslTab --restore-native-command-tab
+```
+
+개발용 `.app` 번들 기준:
+
+```bash
+.build/dev-app/BokslTab.app/Contents/MacOS/BokslTab --restore-native-command-tab
+```
+
+명령 실행 후 `nativeCommandTabRestore=succeeded`가 출력되면 복구가 완료된 것입니다. 로그에는 `native-hotkey.recovery enable id=1/2`가 기록됩니다.
 
 ### 손쉬운 사용 목록에 BokslTab이 없음
 

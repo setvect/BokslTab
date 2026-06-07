@@ -5,6 +5,10 @@ struct PrioritizedHotkeyPlan: Equatable, Sendable {
     let eventTapDefinition: HotkeyDefinition?
     let carbonDefinitionsWhenEventTapSucceeds: [HotkeyDefinition]
 
+    var requiresNativeCommandTabOverride: Bool {
+        eventTapDefinition != nil
+    }
+
     static func make(definitions: [HotkeyDefinition]) -> PrioritizedHotkeyPlan {
         let eventTapDefinition = definitions.first { definition in
             definition.mode == .activeAppWindows
@@ -22,13 +26,24 @@ struct PrioritizedHotkeyPlan: Equatable, Sendable {
 public final class PrioritizedGlobalHotkeyService: GlobalHotkeyServicing {
     private let commandTabEventTapService: CommandTabEventTapHotkeyServicing
     private let fallbackHotkeyService: GlobalHotkeyServicing
+    private let nativeCommandTabHotkeyService: NativeCommandTabHotkeyServicing
 
-    public init(
-        commandTabEventTapService: CommandTabEventTapHotkeyServicing = CommandTabEventTapHotkeyService(),
-        fallbackHotkeyService: GlobalHotkeyServicing = CarbonGlobalHotkeyService()
+    public convenience init() {
+        self.init(
+            commandTabEventTapService: CommandTabEventTapHotkeyService(),
+            fallbackHotkeyService: CarbonGlobalHotkeyService(),
+            nativeCommandTabHotkeyService: NativeCommandTabHotkeyService()
+        )
+    }
+
+    init(
+        commandTabEventTapService: CommandTabEventTapHotkeyServicing,
+        fallbackHotkeyService: GlobalHotkeyServicing,
+        nativeCommandTabHotkeyService: NativeCommandTabHotkeyServicing = NativeCommandTabHotkeyService()
     ) {
         self.commandTabEventTapService = commandTabEventTapService
         self.fallbackHotkeyService = fallbackHotkeyService
+        self.nativeCommandTabHotkeyService = nativeCommandTabHotkeyService
     }
 
     public func start(
@@ -41,8 +56,19 @@ public final class PrioritizedGlobalHotkeyService: GlobalHotkeyServicing {
         let carbonDefinitions: [HotkeyDefinition]
 
         BokslTabDiagnosticLog.write("hotkey.priority.start definitions=\(definitions.map(\.description).joined(separator: ", "))")
-        if let eventTapDefinition = plan.eventTapDefinition,
-           startCommandTabEventTap(definition: eventTapDefinition, onTrigger: onTrigger) {
+        let nativeCommandTabDisabled: Bool
+        if plan.requiresNativeCommandTabOverride {
+            nativeCommandTabDisabled = nativeCommandTabHotkeyService.disableCommandTabPair()
+            BokslTabDiagnosticLog.write("hotkey.priority.nativeCommandTab disabled=\(nativeCommandTabDisabled)")
+        } else {
+            nativeCommandTabDisabled = false
+        }
+
+        if nativeCommandTabDisabled {
+            carbonDefinitions = definitions
+            BokslTabDiagnosticLog.write("hotkey.priority.nativeCommandTab active; using Carbon for all definitions")
+        } else if let eventTapDefinition = plan.eventTapDefinition,
+                  startCommandTabEventTap(definition: eventTapDefinition, onTrigger: onTrigger) {
             carbonDefinitions = plan.carbonDefinitionsWhenEventTapSucceeds
             BokslTabDiagnosticLog.write("hotkey.priority.eventtap active; carbonDefinitions=\(carbonDefinitions.map(\.description).joined(separator: ", "))")
         } else {
@@ -63,6 +89,7 @@ public final class PrioritizedGlobalHotkeyService: GlobalHotkeyServicing {
     public func stop() {
         commandTabEventTapService.stop()
         fallbackHotkeyService.stop()
+        nativeCommandTabHotkeyService.restore()
     }
 
     private func startCommandTabEventTap(

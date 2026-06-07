@@ -25,6 +25,11 @@ private enum CommandTabEventTapStatus {
     static let runLoopSourceFailed = OSStatus(-10_002)
 }
 
+enum CommandTabEventTapConfiguration {
+    static let location = CGEventTapLocation.cghidEventTap
+    static let locationDescription = "cghidEventTap"
+}
+
 public protocol CommandTabEventTapHotkeyServicing: AnyObject {
     func start(
         definition: HotkeyDefinition,
@@ -51,7 +56,9 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
     ) throws {
         stop()
 
-        BokslTabDiagnosticLog.write("eventtap.start requested definition=\(definition)")
+        BokslTabDiagnosticLog.write(
+            "eventtap.start requested location=\(CommandTabEventTapConfiguration.locationDescription) definition=\(definition)"
+        )
 
         guard definition.mode == .activeAppWindows,
               definition.keyCode == UInt32(CommandTabEventTapMatcher.tabKeyCode),
@@ -66,14 +73,16 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
 
         let eventsOfInterest = CGEventMask(1 << CGEventType.keyDown.rawValue)
         guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
+            tap: CommandTabEventTapConfiguration.location,
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: eventsOfInterest,
             callback: CommandTabEventTapHotkeyService.eventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            BokslTabDiagnosticLog.write("eventtap.start failed tapCreate code=\(CommandTabEventTapStatus.creationFailed) definition=\(definition)")
+            BokslTabDiagnosticLog.write(
+                "eventtap.start failed tapCreate location=\(CommandTabEventTapConfiguration.locationDescription) code=\(CommandTabEventTapStatus.creationFailed) definition=\(definition)"
+            )
             stop()
             throw HotkeyRegistrationError.registrationFailed(
                 definition: definition,
@@ -95,7 +104,9 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        BokslTabDiagnosticLog.write("eventtap.start succeeded definition=\(definition) runLoop=main commonModes")
+        BokslTabDiagnosticLog.write(
+            "eventtap.start succeeded location=\(CommandTabEventTapConfiguration.locationDescription) definition=\(definition) runLoop=main commonModes"
+        )
     }
 
     public func stop() {
