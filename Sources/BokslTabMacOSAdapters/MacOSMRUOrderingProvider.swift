@@ -51,6 +51,11 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
         ).filter { itemIDs.contains($0) }
         let historyItemIDs = history.orderedItemIDs().filter { itemIDs.contains($0) }
         let orderedItemIDs = MRUOrderingDeduplicator.uniqueIDs(historyItemIDs + frontToBackItemIDs)
+        let firstSnapshotID = snapshots.first?.windowID ?? "none"
+        let firstSnapshotMatched = snapshots.first.map { itemIDs.contains($0.windowID) } ?? false
+        BokslTabDiagnosticLog.write(
+            "mru.cg raw=\(infoList.count) snapshots=\(snapshots.count) items=\(itemIDs.count) first=\(firstSnapshotID) firstMatched=\(firstSnapshotMatched) frontMatches=\(frontToBackItemIDs.prefix(8).joined(separator: ",")) historyMatches=\(historyItemIDs.prefix(8).joined(separator: ","))"
+        )
 
         guard !orderedItemIDs.isEmpty else {
             return .fallback(reason: "no-matching-front-to-back-windows")

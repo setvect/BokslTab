@@ -7,7 +7,14 @@ public protocol RunningAppProviding {
 
 public protocol WindowCatalogProviding {
     func windowsForAllApps() -> [WindowIdentity]
+    func windowsForAllApps(including apps: [AppIdentity]) -> [WindowIdentity]
     func windows(for app: AppIdentity) -> [WindowIdentity]
+}
+
+public extension WindowCatalogProviding {
+    func windowsForAllApps(including apps: [AppIdentity]) -> [WindowIdentity] {
+        windowsForAllApps()
+    }
 }
 
 public protocol AppActivating {

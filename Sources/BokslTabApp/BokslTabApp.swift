@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowCatalogProvider = MacOSWindowCatalogProvider()
         let permissionAdvisor = MacOSPermissionAdvisor()
         let apps = runningAppProvider.runningApps()
-        let windows = windowCatalogProvider.windowsForAllApps()
+        let windows = windowCatalogProvider.windowsForAllApps(including: apps)
         let composedItems = SwitcherItemComposer.composeAllAppsAndWindows(
             apps: apps,
             windows: windows,
@@ -317,9 +317,11 @@ final class SwitcherCoordinator {
     private func presentation(for mode: SwitcherMode) -> SwitcherPresentation {
         switch mode {
         case .allAppsAndWindows:
+            let apps = runningAppProvider.runningApps()
+            let windows = windowCatalogProvider.windowsForAllApps(including: apps)
             let items = SwitcherItemComposer.composeAllAppsAndWindows(
-                apps: runningAppProvider.runningApps(),
-                windows: windowCatalogProvider.windowsForAllApps(),
+                apps: apps,
+                windows: windows,
                 currentProcessIdentifier: getpid()
             )
             return orderForMRU(mode: mode, items: items)
