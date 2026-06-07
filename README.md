@@ -100,7 +100,7 @@ Accessibility 권한 테스트까지 하려면 SwiftPM raw binary보다 개발�
 open .build/dev-app/BokslTab.app
 ```
 
-이 방식은 `.build/dev-app/BokslTab.app` 번들을 만들고 ad-hoc 서명합니다. 정식 배포용 서명은 아니지만, `swift run`보다 macOS 권한 화면에서 `BokslTab.app`으로 인식될 가능성이 높습니다.
+이 방식은 `.build/dev-app/BokslTab.app` 번들을 만들고 개발용 안정 서명을 적용합니다. 정식 배포용 서명은 아니지만, `swift run`보다 macOS 권한 화면에서 `BokslTab.app`으로 인식될 가능성이 높고, 일반적인 소스 변경/재빌드 후에도 Accessibility 권한이 유지되도록 고정된 designated requirement를 사용합니다.
 
 ### SwiftPM raw binary로 실행
 
@@ -175,7 +175,7 @@ open .build/dev-app/BokslTab.app
 
 `swift run BokslTab`은 정식 `.app` 번들이 아니라 SwiftPM이 만든 raw executable을 터미널/iTerm 하위 프로세스로 실행합니다. 이 경우 macOS 권한 프롬프트가 `BokslTab`이 아니라 `iTerm.app` 또는 `Terminal.app`이 컴퓨터를 제어하려 한다고 표시될 수 있습니다.
 
-빌드 산출물을 지우거나 다시 만들면 macOS가 다른 실행 파일로 인식할 수 있으므로 권한을 다시 허용해야 할 수 있습니다.
+개발용 `.app` 빌드는 `dev.boksl.BokslTab` bundle id와 고정 designated requirement를 사용합니다. 이 스크립트 변경을 적용한 뒤에는 최초 한 번 권한을 다시 허용해야 할 수 있지만, 이후 일반적인 소스 변경/재빌드에서는 같은 앱 권한으로 유지되는 것을 목표로 합니다.
 
 ### Screen Recording / 화면 기록
 
@@ -235,16 +235,28 @@ cp .build/release/BokslTab ~/Applications/BokslTab-dev/BokslTab
 - 메뉴바 앱처럼 동작하지만 Finder에서 일반 앱처럼 보이는 설치 경험은 아닙니다.
 - Accessibility 권한은 복사한 실행 파일 경로 기준으로 다시 허용해야 할 수 있습니다.
 
-### 로컬 ad-hoc 서명
+### 로컬 개발 서명
 
-내 Mac에서만 테스트할 목적이면 ad-hoc 서명을 붙일 수 있습니다.
+`scripts/build-dev-app.sh`는 기본적으로 ad-hoc identity(`-`)를 쓰되, designated requirement를 `identifier "dev.boksl.BokslTab"`로 고정합니다. plain ad-hoc 서명은 바이너리가 바뀔 때마다 `cdhash`가 바뀌어 Accessibility 권한이 반복 초기화될 수 있으므로 직접 raw binary에 ad-hoc 서명하는 방식은 권장하지 않습니다.
 
 ```bash
-codesign --force --sign - ~/Applications/BokslTab-dev/BokslTab
-codesign --verify --verbose ~/Applications/BokslTab-dev/BokslTab
+./scripts/build-dev-app.sh
+codesign -d -r- .build/dev-app/BokslTab.app
 ```
 
-이 서명은 Gatekeeper 배포용 Developer ID 서명이 아닙니다. 다른 사람에게 안전하게 배포하는 용도로 쓰지 않습니다.
+출력에 다음 요구사항이 보이면 개발용 권한 식별자가 안정화된 상태입니다.
+
+```text
+designated => identifier "dev.boksl.BokslTab"
+```
+
+Apple Development 또는 Developer ID 인증서가 있다면 아래처럼 명시적으로 사용할 수 있습니다.
+
+```bash
+CODESIGN_IDENTITY="Apple Development: <NAME>" ./scripts/build-dev-app.sh
+```
+
+기본 개발 서명은 Gatekeeper 배포용 Developer ID 서명이 아닙니다. 다른 사람에게 안전하게 배포하는 용도로 쓰지 않습니다.
 
 ## 배포
 
@@ -270,7 +282,7 @@ codesign --verify --verbose ~/Applications/BokslTab-dev/BokslTab
 - `BokslTab.app/Contents/MacOS/BokslTab`에 실행 파일 복사
 - `Info.plist` 생성
 - `LSUIElement=true` 설정으로 메뉴바 앱처럼 실행
-- ad-hoc 서명
+- 개발용 안정 서명. 기본값은 ad-hoc identity + 고정 designated requirement이고, `CODESIGN_IDENTITY` 환경변수로 Apple Development/Developer ID 인증서를 지정할 수 있음
 
 release 바이너리로 번들을 만들려면:
 
@@ -278,7 +290,7 @@ release 바이너리로 번들을 만들려면:
 CONFIGURATION=release ./scripts/build-dev-app.sh
 ```
 
-주의: 이 스크립트의 ad-hoc 서명은 로컬 개발용입니다. 외부 배포에는 Developer ID 서명과 공증이 필요합니다.
+주의: 이 스크립트의 기본 서명은 로컬 개발용입니다. 외부 배포에는 Developer ID 서명과 공증이 필요합니다.
 
 ### 2. Developer ID 서명
 
@@ -419,6 +431,24 @@ open .build/dev-app/BokslTab.app
 
 - 앱 패널의 `설정 열기` 버튼을 눌러 Accessibility 프롬프트를 먼저 발생시킵니다.
 - 그래도 목록에 없다면 손쉬운 사용 화면의 `+` 버튼으로 `.build/dev-app/BokslTab.app`을 수동 추가합니다. `.build`는 숨김 디렉터리라 Finder 파일 선택 창에서 `Command + Shift + .`로 숨김 파일 표시를 켜야 할 수 있습니다.
+
+### 소스 변경마다 손쉬운 사용 권한을 다시 요구함
+
+- `./scripts/build-dev-app.sh`로 실행해야 합니다. `swift run BokslTab` 또는 `.build/debug/BokslTab` 직접 실행은 권한 주체가 바뀔 수 있습니다.
+- 스크립트는 개발용 `.app`에 고정 designated requirement를 넣어 일반적인 소스 변경/재빌드 후에도 같은 앱으로 인식되도록 합니다.
+- 이 변경을 처음 적용한 직후에는 기존 cdhash 기반 권한과 새 identifier 기반 권한이 달라서 한 번은 다시 허용해야 할 수 있습니다.
+- 이후에도 반복된다면 다음 명령으로 요구사항이 고정되어 있는지 확인합니다.
+
+```bash
+./scripts/build-dev-app.sh
+codesign -d -r- .build/dev-app/BokslTab.app
+```
+
+정상 출력:
+
+```text
+designated => identifier "dev.boksl.BokslTab"
+```
 
 ### 창 전환이 앱 전환처럼만 동작함
 

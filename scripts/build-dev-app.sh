@@ -11,6 +11,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 EXECUTABLE_PATH="$MACOS_DIR/$APP_NAME"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 if [[ "$CONFIGURATION" == "release" ]]; then
   swift build -c release --package-path "$ROOT_DIR"
@@ -58,9 +59,23 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signing is enough for local development and makes the bundle identity more stable
-# than running a raw SwiftPM binary from a terminal. It is not suitable for external distribution.
-codesign --force --sign - "$APP_DIR" >/dev/null
+# Local development uses a stable designated requirement so macOS TCC permissions
+# such as Accessibility survive normal source changes. Plain ad-hoc signing
+# defaults to a cdhash-only requirement, which changes whenever the binary changes.
+if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
+  codesign \
+    --force \
+    --sign "$CODESIGN_IDENTITY" \
+    --identifier "$BUNDLE_ID" \
+    --requirements "=designated => identifier \"$BUNDLE_ID\"" \
+    "$APP_DIR" >/dev/null
+else
+  codesign \
+    --force \
+    --sign "$CODESIGN_IDENTITY" \
+    --identifier "$BUNDLE_ID" \
+    "$APP_DIR" >/dev/null
+fi
 codesign --verify --verbose "$APP_DIR" >/dev/null
 
 echo "$APP_DIR"
