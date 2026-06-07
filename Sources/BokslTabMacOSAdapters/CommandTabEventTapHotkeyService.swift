@@ -10,8 +10,7 @@ enum CommandTabEventTapMatcher {
         flags: CGEventFlags,
         definition: HotkeyDefinition
     ) -> Bool {
-        definition.mode == .activeAppWindows
-            && definition.keyCode == UInt32(tabKeyCode)
+        definition.keyCode == UInt32(tabKeyCode)
             && definition.modifiers == [.command]
             && keyCode == tabKeyCode
             && flags.contains(.maskCommand)
@@ -60,8 +59,7 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
             "eventtap.start requested location=\(CommandTabEventTapConfiguration.locationDescription) definition=\(definition)"
         )
 
-        guard definition.mode == .activeAppWindows,
-              definition.keyCode == UInt32(CommandTabEventTapMatcher.tabKeyCode),
+        guard definition.keyCode == UInt32(CommandTabEventTapMatcher.tabKeyCode),
               definition.modifiers == [.command]
         else {
             BokslTabDiagnosticLog.write("eventtap.start rejected invalid definition=\(definition)")

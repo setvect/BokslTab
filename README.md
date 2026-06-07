@@ -126,8 +126,8 @@ swift run BokslTab
 
 | 동작 | 단축키 |
 | --- | --- |
-| 모든 앱/창 전환 패널 열기 | `Option + Tab` |
-| 활성 앱 창 전환 패널 열기 | `Command + Tab` |
+| 모든 앱/창 전환 패널 열기 | `Command + Tab` |
+| 활성 앱 창 전환 패널 열기 | `Option + Tab` |
 | 다음 항목 | `Tab`, `↓`, `→` |
 | 이전 항목 | `Shift + Tab`, `↑`, `←` |
 | 선택 항목으로 전환 | `Enter`, `Space` |
@@ -135,7 +135,7 @@ swift run BokslTab
 | 클릭 전환 | row 더블클릭 |
 | 취소 | `Esc` |
 
-`Option + Tab` 패널은 `Option` 키를 떼면 현재 선택 항목으로 전환됩니다. `Command + Tab` 활성 앱 창 패널은 `Command` 키를 떼면 현재 선택 항목으로 전환됩니다.
+`Command + Tab` 모든 앱/창 패널은 `Command` 키를 떼면 현재 선택 항목으로 전환됩니다. `Option + Tab` 활성 앱 창 패널은 `Option` 키를 떼면 현재 선택 항목으로 전환됩니다.
 
 `Command + Tab`은 macOS 기본 앱 전환기보다 BokslTab이 먼저 처리하도록 앱 실행 중 macOS native symbolic hotkey(`Cmd+Tab`, `Cmd+Shift+Tab`)를 임시 비활성화한 뒤 Carbon 전역 단축키로 등록합니다. 앱이 정상 종료되면 기존 native hotkey 상태를 복원합니다. native override가 실패하면 CoreGraphics HID event tap, 마지막으로 Carbon 등록 fallback을 순서대로 시도하고, 모두 실패하면 패널 하단에 등록 실패 안내를 표시합니다.
 
@@ -369,9 +369,9 @@ tail -f ~/Library/Logs/BokslTab/BokslTab.log
 native-hotkey.disable id=1 ... result=0
 native-hotkey.disable id=2 ... result=0
 hotkey.priority.nativeCommandTab active; using Carbon for all definitions
-carbon.register succeeded ... definition=mode=activeAppWindows, hotkey=Cmd+keyCode(48)
-carbon.hotkey trigger ... mode=activeAppWindows
-coordinator.hotkeyReceived mode=activeAppWindows
+carbon.register succeeded ... definition=mode=allAppsAndWindows, hotkey=Cmd+keyCode(48)
+carbon.hotkey trigger ... mode=allAppsAndWindows
+coordinator.hotkeyReceived mode=allAppsAndWindows
 ```
 
 `native-hotkey.symbols unavailable`, `native-hotkey.disable failed`, `hotkey.priority.eventtap start failed`가 보이면 native override 또는 event tap fallback이 실패한 것입니다. 이 경우 로그의 다음 `carbon.register failed`/`carbon.register succeeded` 결과로 등록 상태를 확인합니다.

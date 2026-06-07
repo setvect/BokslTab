@@ -19,7 +19,7 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         XCTAssertEqual(SwitcherKeyboardMapper.action(for: flagsChangedEvent(keyCode: 58, modifiers: [])), .modifierReleased)
     }
 
-    func testCommandModifierReleaseKeysForActiveAppMode() {
+    func testCommandModifierReleaseKeysForAllAppsMode() {
         XCTAssertNil(
             SwitcherKeyboardMapper.action(
                 for: flagsChangedEvent(keyCode: 55, modifiers: [.command]),

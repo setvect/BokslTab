@@ -11,8 +11,7 @@ struct PrioritizedHotkeyPlan: Equatable, Sendable {
 
     static func make(definitions: [HotkeyDefinition]) -> PrioritizedHotkeyPlan {
         let eventTapDefinition = definitions.first { definition in
-            definition.mode == .activeAppWindows
-                && definition.keyCode == 48
+            definition.keyCode == 48
                 && definition.modifiers == [.command]
         }
         let carbonDefinitionsWhenEventTapSucceeds = definitions.filter { $0 != eventTapDefinition }

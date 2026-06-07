@@ -19,24 +19,24 @@ final class HotkeyModifierMappingTests: XCTestCase {
     }
 
     func testHotkeyDiagnosticDescriptionsIncludeModeAndCode() {
-        let definition = SwitcherMode.activeAppWindows.defaultHotkeyDefinition
+        let definition = SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
         let error = HotkeyRegistrationError.registrationFailed(definition: definition, code: -9878)
 
-        XCTAssertEqual(definition.description, "mode=activeAppWindows, hotkey=Cmd+keyCode(48)")
-        XCTAssertTrue(error.description.contains("activeAppWindows"))
+        XCTAssertEqual(definition.description, "mode=allAppsAndWindows, hotkey=Cmd+keyCode(48)")
+        XCTAssertTrue(error.description.contains("allAppsAndWindows"))
         XCTAssertTrue(error.description.contains("-9878"))
     }
 
     func testDefaultHotkeyDefinitionsAreModeSpecific() {
-        XCTAssertEqual(SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition.modifiers, [.option])
+        XCTAssertEqual(SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition.modifiers, [.command])
         XCTAssertEqual(SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition.keyCode, 48)
-        XCTAssertEqual(SwitcherMode.activeAppWindows.defaultHotkeyDefinition.modifiers, [.command])
+        XCTAssertEqual(SwitcherMode.activeAppWindows.defaultHotkeyDefinition.modifiers, [.option])
         XCTAssertEqual(SwitcherMode.activeAppWindows.defaultHotkeyDefinition.keyCode, 48)
     }
 
     func testPartialHotkeyDiagnosticIncludesEachFailedDefinition() {
         let failure = HotkeyRegistrationFailure(
-            definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition,
+            definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition,
             code: -9878
         )
         let error = HotkeyRegistrationError.partialRegistrationFailed(failures: [failure])
@@ -51,40 +51,40 @@ final class HotkeyModifierMappingTests: XCTestCase {
         XCTAssertEqual(CommandTabEventTapConfiguration.locationDescription, "cghidEventTap")
     }
 
-    func testCommandTabEventTapMatcherCapturesOnlyActiveAppCommandTab() {
+    func testCommandTabEventTapMatcherCapturesOnlyConfiguredCommandTab() {
         XCTAssertTrue(
             CommandTabEventTapMatcher.shouldCapture(
                 keyCode: 48,
                 flags: [.maskCommand],
-                definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition
+                definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
             )
         )
         XCTAssertTrue(
             CommandTabEventTapMatcher.shouldCapture(
                 keyCode: 48,
                 flags: [.maskCommand, .maskShift],
-                definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition
+                definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
             )
         )
         XCTAssertFalse(
             CommandTabEventTapMatcher.shouldCapture(
                 keyCode: 48,
                 flags: [.maskAlternate],
-                definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition
+                definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
             )
         )
         XCTAssertFalse(
             CommandTabEventTapMatcher.shouldCapture(
                 keyCode: 49,
                 flags: [.maskCommand],
-                definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition
+                definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
             )
         )
         XCTAssertFalse(
             CommandTabEventTapMatcher.shouldCapture(
                 keyCode: 48,
                 flags: [.maskCommand],
-                definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
+                definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition
             )
         )
     }
@@ -96,8 +96,8 @@ final class HotkeyModifierMappingTests: XCTestCase {
         ]
         let plan = PrioritizedHotkeyPlan.make(definitions: definitions)
 
-        XCTAssertEqual(plan.eventTapDefinition, SwitcherMode.activeAppWindows.defaultHotkeyDefinition)
-        XCTAssertEqual(plan.carbonDefinitionsWhenEventTapSucceeds, [SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition])
+        XCTAssertEqual(plan.eventTapDefinition, SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition)
+        XCTAssertEqual(plan.carbonDefinitionsWhenEventTapSucceeds, [SwitcherMode.activeAppWindows.defaultHotkeyDefinition])
         XCTAssertTrue(plan.requiresNativeCommandTabOverride)
     }
 
@@ -154,7 +154,7 @@ final class HotkeyModifierMappingTests: XCTestCase {
     func testPrioritizedServiceFallsBackToAllCarbonDefinitionsWhenNativeAndEventTapFail() throws {
         let eventTapService = FakeCommandTabEventTapHotkeyService(
             startError: HotkeyRegistrationError.registrationFailed(
-                definition: SwitcherMode.activeAppWindows.defaultHotkeyDefinition,
+                definition: SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition,
                 code: -10_001
             )
         )
@@ -170,7 +170,7 @@ final class HotkeyModifierMappingTests: XCTestCase {
         try service.start(definitions: defaultDefinitions) { _ in }
 
         XCTAssertEqual(nativeHotkeyService.disableCallCount, 1)
-        XCTAssertEqual(eventTapService.startedDefinitions, [SwitcherMode.activeAppWindows.defaultHotkeyDefinition])
+        XCTAssertEqual(eventTapService.startedDefinitions, [SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition])
         XCTAssertTrue(eventTapService.didStop)
         XCTAssertEqual(fallbackService.startedDefinitions, defaultDefinitions)
     }
@@ -207,11 +207,11 @@ final class HotkeyModifierMappingTests: XCTestCase {
             nativeCommandTabHotkeyService: nativeHotkeyService
         )
 
-        try service.start(definitions: [SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition]) { _ in }
+        try service.start(definitions: [SwitcherMode.activeAppWindows.defaultHotkeyDefinition]) { _ in }
 
         XCTAssertEqual(nativeHotkeyService.disableCallCount, 0)
         XCTAssertEqual(eventTapService.startedDefinitions, [])
-        XCTAssertEqual(fallbackService.startedDefinitions, [SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition])
+        XCTAssertEqual(fallbackService.startedDefinitions, [SwitcherMode.activeAppWindows.defaultHotkeyDefinition])
     }
 
     private var defaultDefinitions: [HotkeyDefinition] {

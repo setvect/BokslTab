@@ -73,9 +73,9 @@ public extension SwitcherMode {
     var defaultHotkeyDefinition: HotkeyDefinition {
         switch self {
         case .allAppsAndWindows:
-            return HotkeyDefinition(mode: self, keyCode: 48, modifiers: [.option])
-        case .activeAppWindows:
             return HotkeyDefinition(mode: self, keyCode: 48, modifiers: [.command])
+        case .activeAppWindows:
+            return HotkeyDefinition(mode: self, keyCode: 48, modifiers: [.option])
         }
     }
 }
