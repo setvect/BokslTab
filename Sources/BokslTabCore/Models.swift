@@ -26,15 +26,75 @@ public struct AppIdentity: Hashable, Sendable {
     }
 }
 
+public struct WindowTabIdentity: Hashable, Sendable {
+    public let parentWindowID: UInt32
+    public let parentTitle: String?
+    public let parentFrame: WindowFrameIdentity?
+    public let index: Int
+    public let title: String
+    public let isSelected: Bool
+
+    public init(
+        parentWindowID: UInt32,
+        parentTitle: String? = nil,
+        parentFrame: WindowFrameIdentity? = nil,
+        index: Int,
+        title: String,
+        isSelected: Bool = false
+    ) {
+        self.parentWindowID = parentWindowID
+        self.parentTitle = parentTitle
+        self.parentFrame = parentFrame
+        self.index = index
+        self.title = title
+        self.isSelected = isSelected
+    }
+
+    public static func == (lhs: WindowTabIdentity, rhs: WindowTabIdentity) -> Bool {
+        lhs.parentWindowID == rhs.parentWindowID
+            && lhs.parentTitle == rhs.parentTitle
+            && lhs.index == rhs.index
+            && lhs.title == rhs.title
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(parentWindowID)
+        hasher.combine(parentTitle)
+        hasher.combine(index)
+        hasher.combine(title)
+    }
+}
+
+public struct WindowFrameIdentity: Hashable, Sendable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
 public struct WindowIdentity: Hashable, Sendable {
     public let windowID: UInt32
     public let ownerProcessIdentifier: Int32
     public let title: String?
+    public let tab: WindowTabIdentity?
 
-    public init(windowID: UInt32, ownerProcessIdentifier: Int32, title: String? = nil) {
+    public init(
+        windowID: UInt32,
+        ownerProcessIdentifier: Int32,
+        title: String? = nil,
+        tab: WindowTabIdentity? = nil
+    ) {
         self.windowID = windowID
         self.ownerProcessIdentifier = ownerProcessIdentifier
         self.title = title
+        self.tab = tab
     }
 }
 
@@ -63,10 +123,18 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
             case .app:
                 self.id = SwitcherItem.appID(processIdentifier: app.processIdentifier)
             case .window(let window):
-                self.id = SwitcherItem.windowID(
-                    windowID: window.windowID,
-                    ownerProcessIdentifier: window.ownerProcessIdentifier
-                )
+                if let tab = window.tab {
+                    self.id = SwitcherItem.tabWindowID(
+                        parentWindowID: tab.parentWindowID,
+                        ownerProcessIdentifier: window.ownerProcessIdentifier,
+                        index: tab.index
+                    )
+                } else {
+                    self.id = SwitcherItem.windowID(
+                        windowID: window.windowID,
+                        ownerProcessIdentifier: window.ownerProcessIdentifier
+                    )
+                }
             }
         }
     }
@@ -101,7 +169,18 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
         switch kind {
         case .app:
             return [id]
-        case .window:
+        case .window(let window):
+            if let tab = window.tab {
+                return [
+                    id,
+                    SwitcherItem.windowID(
+                        windowID: tab.parentWindowID,
+                        ownerProcessIdentifier: window.ownerProcessIdentifier
+                    ),
+                    SwitcherItem.appID(processIdentifier: app.processIdentifier)
+                ]
+            }
+
             return [
                 id,
                 SwitcherItem.appID(processIdentifier: app.processIdentifier)
@@ -115,6 +194,14 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
 
     public static func windowID(windowID: UInt32, ownerProcessIdentifier: Int32) -> String {
         "window:\(windowID):\(ownerProcessIdentifier)"
+    }
+
+    public static func tabWindowID(
+        parentWindowID: UInt32,
+        ownerProcessIdentifier: Int32,
+        index: Int
+    ) -> String {
+        "tab:\(parentWindowID):\(ownerProcessIdentifier):\(index)"
     }
 }
 

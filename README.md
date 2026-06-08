@@ -9,6 +9,7 @@ BokslTab은 macOS용 AltTab 스타일 앱/창 전환기 프로토타입입니다
 - 모든 앱/창 목록 표시 및 전환
 - 현재 활성 앱의 창 목록 표시 및 전환
 - 앱 아이콘 + 창 제목 표시
+- macOS 탭 그룹은 가능한 경우 탭별 창처럼 표시
 - 키보드/마우스 선택 이동
 - `Command + Tab`, `Option + Tab` 전역 단축키
 
@@ -105,6 +106,10 @@ BokslTab이 비정상 종료되면 macOS 기본 `Command + Tab` 상태가 남아
 ### 창 제목이 비어 있음
 
 macOS 권한이나 앱 상태에 따라 창 제목을 가져오지 못할 수 있습니다. 이 경우 fallback 제목이 표시될 수 있습니다.
+
+### IntelliJ 탭 그룹 확인
+
+IntelliJ에서 여러 프로젝트를 연 뒤 `Window > Merge All Project Windows`를 실행합니다. BokslTab 목록에서 각 프로젝트 탭이 별도 항목으로 보이고 선택 시 해당 탭으로 이동하는지 확인합니다. MVP는 지원 앱 allowlist에서 direct `AXTabs`로 노출되는 macOS 탭만 펼치며, 브라우저 내부 웹 탭은 펼치지 않습니다. 로그에는 `window-catalog.ax.tabs`, `window-activation.ax.tab` 항목이 남습니다.
 
 ## 설치 / 배포
 

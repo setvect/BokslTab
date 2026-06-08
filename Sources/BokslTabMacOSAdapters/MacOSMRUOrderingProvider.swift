@@ -42,19 +42,22 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
             return .fallback(reason: "cg-window-list-unavailable")
         }
 
-        let itemIDs = Set(items.map(\.id))
+        let projectionIndex = MRUItemProjectionIndex(items: items)
         let snapshots = infoList.compactMap(MRUWindowSnapshot.init(windowInfo:))
         recordFrontmostSnapshot(snapshots.first)
 
         let frontToBackItemIDs = MRUOrderingDeduplicator.uniqueIDs(
-            snapshots.flatMap(\.projectedItemIDs)
-        ).filter { itemIDs.contains($0) }
-        let historyItemIDs = history.orderedItemIDs().filter { itemIDs.contains($0) }
+            snapshots.flatMap(\.projectedItemIDs).compactMap { projectionIndex.itemID(forProjectedID: $0) }
+        )
+        let historyItemIDs = MRUOrderingDeduplicator.uniqueIDs(
+            history.orderedItemIDs().compactMap { projectionIndex.itemID(forProjectedID: $0) }
+        )
         let orderedItemIDs = MRUOrderingDeduplicator.uniqueIDs(historyItemIDs + frontToBackItemIDs)
         let firstSnapshotID = snapshots.first?.windowID ?? "none"
-        let firstSnapshotMatched = snapshots.first.map { itemIDs.contains($0.windowID) } ?? false
+        let firstSnapshotMatched = snapshots.first
+            .flatMap { projectionIndex.itemID(forProjectedID: $0.windowID) } != nil
         BokslTabDiagnosticLog.write(
-            "mru.cg raw=\(infoList.count) snapshots=\(snapshots.count) items=\(itemIDs.count) first=\(firstSnapshotID) firstMatched=\(firstSnapshotMatched) frontMatches=\(frontToBackItemIDs.prefix(8).joined(separator: ",")) historyMatches=\(historyItemIDs.prefix(8).joined(separator: ","))"
+            "mru.cg raw=\(infoList.count) snapshots=\(snapshots.count) items=\(items.count) first=\(firstSnapshotID) firstMatched=\(firstSnapshotMatched) frontMatches=\(frontToBackItemIDs.prefix(8).joined(separator: ",")) historyMatches=\(historyItemIDs.prefix(8).joined(separator: ","))"
         )
 
         guard !orderedItemIDs.isEmpty else {
@@ -134,6 +137,44 @@ final class MRUItemHistory {
         lock.lock()
         defer { lock.unlock() }
         return itemIDs
+    }
+}
+
+struct MRUItemProjectionIndex {
+    private let itemIDByProjectedID: [String: String]
+
+    init(items: [SwitcherItem]) {
+        var exactItemIDs: [String: String] = [:]
+        var unambiguousAliases: [String: String] = [:]
+        var ambiguousAliases = Set<String>()
+
+        for item in items {
+            exactItemIDs[item.id] = item.id
+
+            switch item.kind {
+            case .app:
+                unambiguousAliases[item.id] = item.id
+            case .window(let window):
+                guard let tab = window.tab, tab.isSelected else { continue }
+                let parentWindowID = SwitcherItem.windowID(
+                    windowID: tab.parentWindowID,
+                    ownerProcessIdentifier: window.ownerProcessIdentifier
+                )
+                if let existing = unambiguousAliases[parentWindowID], existing != item.id {
+                    unambiguousAliases.removeValue(forKey: parentWindowID)
+                    ambiguousAliases.insert(parentWindowID)
+                } else if !ambiguousAliases.contains(parentWindowID) {
+                    unambiguousAliases[parentWindowID] = item.id
+                }
+            }
+        }
+
+        ambiguousAliases.forEach { unambiguousAliases.removeValue(forKey: $0) }
+        self.itemIDByProjectedID = exactItemIDs.merging(unambiguousAliases) { exact, _ in exact }
+    }
+
+    func itemID(forProjectedID projectedID: String) -> String? {
+        itemIDByProjectedID[projectedID]
     }
 }
 

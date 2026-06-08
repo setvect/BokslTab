@@ -100,6 +100,68 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(context.fallbackReason, "no-matching-front-to-back-windows")
     }
 
+
+    func testProviderMapsParentWindowToSelectedTabOnly() {
+        let app = AppIdentity(processIdentifier: 10, localizedName: "IDE")
+        let firstTab = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: "Project A",
+                tab: WindowTabIdentity(parentWindowID: 300, index: 0, title: "Project A", isSelected: false)
+            ))
+        )
+        let selectedTab = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: "Project B",
+                tab: WindowTabIdentity(parentWindowID: 300, index: 1, title: "Project B", isSelected: true)
+            ))
+        )
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(infoList: [windowInfo(windowID: 300, pid: 10)])
+        )
+
+        let context = provider.orderingContext(for: .activeAppWindows, items: [firstTab, selectedTab])
+
+        XCTAssertEqual(context.orderedItemIDs, [selectedTab.id])
+        XCTAssertEqual(context.currentItemID, selectedTab.id)
+    }
+
+    func testProviderDoesNotMapParentWindowToArbitraryTabWithoutSelectedFlag() {
+        let app = AppIdentity(processIdentifier: 10, localizedName: "IDE")
+        let firstTab = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: "Project A",
+                tab: WindowTabIdentity(parentWindowID: 300, index: 0, title: "Project A", isSelected: false)
+            ))
+        )
+        let secondTab = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: "Project B",
+                tab: WindowTabIdentity(parentWindowID: 300, index: 1, title: "Project B", isSelected: false)
+            ))
+        )
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(infoList: [windowInfo(windowID: 300, pid: 10)])
+        )
+
+        let context = provider.orderingContext(for: .activeAppWindows, items: [firstTab, secondTab])
+
+        XCTAssertTrue(context.isFallback)
+        XCTAssertEqual(context.fallbackReason, "no-matching-front-to-back-windows")
+    }
+
+
     private func windowInfo(windowID: UInt32, pid: Int32) -> [String: Any] {
         [
             kCGWindowLayer as String: NSNumber(value: 0),

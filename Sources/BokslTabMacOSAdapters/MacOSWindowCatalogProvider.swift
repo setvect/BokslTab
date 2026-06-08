@@ -1,12 +1,20 @@
 import ApplicationServices
+import AppKit
 import BokslTabCore
 import CoreGraphics
 import Foundation
 
 public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
     private let titleCache = WindowTitleCache()
+    private let accessibilityEventCache: AccessibilityWindowEventCache
 
-    public init() {}
+    public init() {
+        self.accessibilityEventCache = .shared
+    }
+
+    init(accessibilityEventCache: AccessibilityWindowEventCache) {
+        self.accessibilityEventCache = accessibilityEventCache
+    }
 
     public func windowsForAllApps() -> [WindowIdentity] {
         currentOnScreenWindows(augmentingWithAccessibilityFor: [])
@@ -17,7 +25,7 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
     }
 
     public func windows(for app: AppIdentity) -> [WindowIdentity] {
-        currentOnScreenWindows(augmentingWithAccessibilityFor: [])
+        currentOnScreenWindows(augmentingWithAccessibilityFor: [app])
             .filter { $0.ownerProcessIdentifier == app.processIdentifier }
     }
 
@@ -40,22 +48,57 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
             BokslTabDiagnosticLog.write("window-catalog.cg.candidate \(snapshot.diagnosticDescription)")
         }
 
-        let enrichedSnapshots = enrichTitlesFromAccessibilityIfPossible(snapshots)
+        let tabExpansionEligibilityByPID = tabExpansionEligibilityByPID(for: snapshots, apps: apps)
+        let tabResolutionEligiblePIDs = Set(
+            tabExpansionEligibilityByPID.compactMap { processIdentifier, decision in
+                decision.canExpandTabs ? processIdentifier : nil
+            }
+        )
+        let accessibilityTrusted = AXIsProcessTrusted()
+        if accessibilityTrusted {
+            accessibilityEventCache.refreshObservers(
+                for: accessibilityEventObserverDescriptors(
+                    snapshots: snapshots,
+                    apps: apps,
+                    eligibilityByPID: tabExpansionEligibilityByPID
+                )
+            )
+            accessibilityEventCache.seedCurrentWindows(for: tabResolutionEligiblePIDs)
+        }
+        let axSnapshotsByPID = accessibilityTrusted
+            ? accessibilityWindowSnapshotsByPID(
+                Set(snapshots.map { $0.identity.ownerProcessIdentifier }),
+                tabResolutionEligiblePIDs: tabResolutionEligiblePIDs
+            )
+            : [:]
+        let enrichedSnapshots = enrichTitlesFromAccessibilityIfPossible(
+            snapshots,
+            axSnapshotsByPID: axSnapshotsByPID
+        )
         let cachedEnrichedSnapshots = titleCache.applyCachedTitles(to: enrichedSnapshots)
         let filteredSnapshots = filterLikelyDuplicateUntitledSnapshots(cachedEnrichedSnapshots)
+        let tabExpandedSnapshots = expandWindowTabsIfPossible(
+            filteredSnapshots,
+            axSnapshotsByPID: axSnapshotsByPID,
+            tabExpansionEligibilityByPID: tabExpansionEligibilityByPID
+        )
         let axOnlySnapshots = accessibilityOnlySnapshotsForAppsWithoutCGWindows(
             apps,
-            includedSnapshots: filteredSnapshots
+            includedSnapshots: tabExpandedSnapshots
         )
-        let liveSnapshots = filteredSnapshots + axOnlySnapshots
-        titleCache.record(liveSnapshots)
+        let accessibilityEventSnapshots = accessibilityEventCachedSnapshotsForEligibleApps(
+            includedSnapshots: tabExpandedSnapshots + axOnlySnapshots,
+            eligiblePIDs: tabResolutionEligiblePIDs
+        )
+        let liveSnapshots = tabExpandedSnapshots + axOnlySnapshots + accessibilityEventSnapshots
+        titleCache.record(filteredSnapshots + axOnlySnapshots)
         let cachedSnapshots = cachedTitleSnapshotsForAppsWithoutWindows(
             apps,
             includedSnapshots: liveSnapshots
         )
         let resultSnapshots = liveSnapshots + cachedSnapshots
         BokslTabDiagnosticLog.write(
-            "window-catalog.result candidates=\(snapshots.count) enriched=\(enrichedSnapshots.count) cgIncluded=\(filteredSnapshots.count) axOnly=\(axOnlySnapshots.count) cached=\(cachedSnapshots.count) included=\(resultSnapshots.count)"
+            "window-catalog.result candidates=\(snapshots.count) enriched=\(enrichedSnapshots.count) cgIncluded=\(filteredSnapshots.count) tabExpanded=\(tabExpandedSnapshots.count) axOnly=\(axOnlySnapshots.count) axEventCached=\(accessibilityEventSnapshots.count) cached=\(cachedSnapshots.count) included=\(resultSnapshots.count)"
         )
         resultSnapshots.forEach { snapshot in
             BokslTabDiagnosticLog.write("window-catalog.include \(snapshot.diagnosticDescription)")
@@ -63,15 +106,15 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         return resultSnapshots.map(\.identity)
     }
 
-    private func enrichTitlesFromAccessibilityIfPossible(_ snapshots: [WindowSnapshot]) -> [WindowSnapshot] {
+    private func enrichTitlesFromAccessibilityIfPossible(
+        _ snapshots: [WindowSnapshot],
+        axSnapshotsByPID: [Int32: [AccessibilityWindowSnapshot]]
+    ) -> [WindowSnapshot] {
         guard AXIsProcessTrusted() else {
             BokslTabDiagnosticLog.write("window-catalog.ax skipped reason=accessibility-untrusted snapshots=\(snapshots.count)")
             return snapshots
         }
 
-        let axSnapshotsByPID = accessibilityWindowSnapshotsByPID(
-            Set(snapshots.map { $0.identity.ownerProcessIdentifier })
-        )
         guard !axSnapshotsByPID.isEmpty else {
             BokslTabDiagnosticLog.write("window-catalog.ax empty snapshots=\(snapshots.count)")
             return snapshots
@@ -158,6 +201,64 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         return filtered
     }
 
+    private func expandWindowTabsIfPossible(
+        _ snapshots: [WindowSnapshot],
+        axSnapshotsByPID: [Int32: [AccessibilityWindowSnapshot]],
+        tabExpansionEligibilityByPID: [Int32: AppTabExpansionEligibilityDecision]
+    ) -> [WindowSnapshot] {
+        guard AXIsProcessTrusted() else {
+            BokslTabDiagnosticLog.write("window-catalog.ax.tabs.skip reason=accessibility-untrusted snapshots=\(snapshots.count)")
+            return snapshots
+        }
+
+        guard !axSnapshotsByPID.isEmpty else {
+            BokslTabDiagnosticLog.write("window-catalog.ax.tabs.skip reason=no-ax-snapshots snapshots=\(snapshots.count)")
+            return snapshots
+        }
+
+        return snapshots.flatMap { snapshot -> [WindowSnapshot] in
+            let eligibility = tabExpansionEligibilityByPID[snapshot.identity.ownerProcessIdentifier]
+            guard eligibility?.canExpandTabs == true else {
+                BokslTabDiagnosticLog.write(
+                    "window-catalog.ax.tabs.skip reason=\(eligibility?.skipReason ?? "unsupported-app-for-window-tabs") pid=\(snapshot.identity.ownerProcessIdentifier) window=\(snapshot.identity.windowID) owner=\(snapshot.ownerName.catalogDiagnosticValue)"
+                )
+                return [snapshot]
+            }
+
+            guard let axSnapshots = axSnapshotsByPID[snapshot.identity.ownerProcessIdentifier],
+                  let axIndex = bestAccessibilityMatchIndex(
+                      for: snapshot,
+                      candidates: axSnapshots,
+                      candidateIndices: Array(axSnapshots.indices)
+                  )
+            else {
+                BokslTabDiagnosticLog.write(
+                    "window-catalog.ax.tabs.skip reason=parent-ax-match-missing pid=\(snapshot.identity.ownerProcessIdentifier) window=\(snapshot.identity.windowID)"
+                )
+                return [snapshot]
+            }
+
+            let axSnapshot = axSnapshots[axIndex]
+            let result = TabExpandedWindowCatalogPolicy.expand(
+                snapshot: snapshot,
+                tabs: axSnapshot.tabs,
+                parentFrame: axSnapshot.frame.windowFrameIdentity
+            )
+            if result.didExpand {
+                let selected = axSnapshot.tabs.first(where: \.isSelected)?.index
+                let titledCount = axSnapshot.tabs.filter { $0.title?.nonBlankCatalogTitle != nil }.count
+                BokslTabDiagnosticLog.write(
+                    "window-catalog.ax.tabs app=\(snapshot.ownerName.catalogDiagnosticValue) pid=\(snapshot.identity.ownerProcessIdentifier) window=\(snapshot.identity.windowID) source=\(axSnapshot.tabSource?.rawValue ?? "unknown") count=\(axSnapshot.tabs.count) titled=\(titledCount) selected=\(selected.map(String.init) ?? "nil") durationMs=\(axSnapshot.tabDurationMs)"
+                )
+            } else {
+                BokslTabDiagnosticLog.write(
+                    "window-catalog.ax.tabs.skip reason=\(result.fallbackReason ?? axSnapshot.tabSkipReason ?? "no-tabs") pid=\(snapshot.identity.ownerProcessIdentifier) window=\(snapshot.identity.windowID) source=\(axSnapshot.tabSource?.rawValue ?? "missing") durationMs=\(axSnapshot.tabDurationMs)"
+                )
+            }
+            return result.snapshots
+        }
+    }
+
     private func accessibilityOnlySnapshotsForAppsWithoutCGWindows(
         _ apps: [AppIdentity],
         includedSnapshots: [WindowSnapshot]
@@ -178,7 +279,8 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         }
 
         let axSnapshotsByPID = accessibilityWindowSnapshotsByPID(
-            Set(missingApps.map(\.processIdentifier))
+            Set(missingApps.map(\.processIdentifier)),
+            tabResolutionEligiblePIDs: []
         )
         let axOnlySnapshots = AXOnlyWindowCatalogPolicy.snapshotsForAppsWithoutCGWindows(
             apps: missingApps,
@@ -233,10 +335,41 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         return snapshots
     }
 
-    private func accessibilityWindowSnapshotsByPID(_ processIdentifiers: Set<Int32>) -> [Int32: [AccessibilityWindowSnapshot]] {
+    private func accessibilityEventCachedSnapshotsForEligibleApps(
+        includedSnapshots: [WindowSnapshot],
+        eligiblePIDs: Set<Int32>
+    ) -> [WindowSnapshot] {
+        guard AXIsProcessTrusted() else {
+            BokslTabDiagnosticLog.write("window-catalog.ax-event-cache skipped reason=accessibility-untrusted")
+            return []
+        }
+
+        guard !eligiblePIDs.isEmpty else {
+            BokslTabDiagnosticLog.write("window-catalog.ax-event-cache skipped reason=no-eligible-apps")
+            return []
+        }
+
+        let snapshots = accessibilityEventCache.snapshots(
+            for: eligiblePIDs,
+            excluding: includedSnapshots
+        )
+        BokslTabDiagnosticLog.write(
+            "window-catalog.ax-event-cache eligiblePIDs=\(eligiblePIDs.sorted().map(String.init).joined(separator: ",")) included=\(snapshots.count)"
+        )
+        snapshots.forEach { snapshot in
+            BokslTabDiagnosticLog.write("window-catalog.ax-event-cache.include \(snapshot.diagnosticDescription)")
+        }
+        return snapshots
+    }
+
+    private func accessibilityWindowSnapshotsByPID(
+        _ processIdentifiers: Set<Int32>,
+        tabResolutionEligiblePIDs: Set<Int32>
+    ) -> [Int32: [AccessibilityWindowSnapshot]] {
         var snapshotsByPID: [Int32: [AccessibilityWindowSnapshot]] = [:]
 
         for processIdentifier in processIdentifiers {
+            let shouldResolveTabs = tabResolutionEligiblePIDs.contains(processIdentifier)
             let appElement = AXUIElementCreateApplication(processIdentifier)
             var rawWindows: CFTypeRef?
             let windowsError = AXUIElementCopyAttributeValue(
@@ -247,29 +380,85 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
             let axWindows = windowsError == .success
                 ? (rawWindows as? [AXUIElement] ?? [])
                 : []
-            let supplementalWindows = axWindows.isEmpty
-                ? supplementalAccessibilityWindows(
-                    from: appElement,
-                    processIdentifier: processIdentifier
-                )
-                : []
+            let supplementalWindows = supplementalAccessibilityWindows(
+                from: appElement,
+                processIdentifier: processIdentifier
+            )
 
             let snapshots = AccessibilityWindowSnapshot.deduplicated(
-                (axWindows + supplementalWindows).compactMap(AccessibilityWindowSnapshot.init(window:))
+                (axWindows + supplementalWindows).compactMap { window in
+                    AccessibilityWindowSnapshot(window: window, resolveTabs: shouldResolveTabs)
+                }
             )
             if !snapshots.isEmpty {
                 snapshotsByPID[processIdentifier] = snapshots
                 BokslTabDiagnosticLog.write(
-                    "window-catalog.ax.fetch pid=\(processIdentifier) raw=\(axWindows.count) supplemental=\(supplementalWindows.count) snapshots=\(snapshots.count)"
+                    "window-catalog.ax.fetch pid=\(processIdentifier) raw=\(axWindows.count) supplemental=\(supplementalWindows.count) snapshots=\(snapshots.count) tabResolution=\(shouldResolveTabs ? "enabled" : "disabled")"
                 )
             } else {
                 BokslTabDiagnosticLog.write(
-                    "window-catalog.ax.fetch pid=\(processIdentifier) raw=\(axWindows.count) supplemental=\(supplementalWindows.count) snapshots=0 error=\(windowsError.rawValue)"
+                    "window-catalog.ax.fetch pid=\(processIdentifier) raw=\(axWindows.count) supplemental=\(supplementalWindows.count) snapshots=0 error=\(windowsError.rawValue) tabResolution=\(shouldResolveTabs ? "enabled" : "disabled")"
                 )
             }
         }
 
         return snapshotsByPID
+    }
+
+    private func tabExpansionEligibilityByPID(
+        for snapshots: [WindowSnapshot],
+        apps: [AppIdentity]
+    ) -> [Int32: AppTabExpansionEligibilityDecision] {
+        var decisions: [Int32: AppTabExpansionEligibilityDecision] = [:]
+        for snapshot in snapshots where decisions[snapshot.identity.ownerProcessIdentifier] == nil {
+            let runningApp = NSRunningApplication(processIdentifier: snapshot.identity.ownerProcessIdentifier)
+            decisions[snapshot.identity.ownerProcessIdentifier] = AppTabExpansionEligibilityPolicy.decision(
+                for: AppTabExpansionAppDescriptor(
+                    bundleIdentifier: runningApp?.bundleIdentifier,
+                    ownerName: snapshot.ownerName,
+                    localizedName: runningApp?.localizedName
+                )
+            )
+        }
+        for app in apps where decisions[app.processIdentifier] == nil {
+            decisions[app.processIdentifier] = AppTabExpansionEligibilityPolicy.decision(
+                for: AppTabExpansionAppDescriptor(
+                    bundleIdentifier: app.bundleIdentifier,
+                    ownerName: app.processName,
+                    localizedName: app.localizedName
+                )
+            )
+        }
+        return decisions
+    }
+
+    private func accessibilityEventObserverDescriptors(
+        snapshots: [WindowSnapshot],
+        apps: [AppIdentity],
+        eligibilityByPID: [Int32: AppTabExpansionEligibilityDecision]
+    ) -> [AccessibilityEventObservedAppDescriptor] {
+        let snapshotDescriptors = snapshots.compactMap { snapshot -> AccessibilityEventObservedAppDescriptor? in
+            guard eligibilityByPID[snapshot.identity.ownerProcessIdentifier]?.canExpandTabs == true else {
+                return nil
+            }
+            return AccessibilityEventObservedAppDescriptor(
+                processIdentifier: snapshot.identity.ownerProcessIdentifier,
+                ownerName: snapshot.ownerName
+            )
+        }
+        let appDescriptors = apps.compactMap { app -> AccessibilityEventObservedAppDescriptor? in
+            guard eligibilityByPID[app.processIdentifier]?.canExpandTabs == true else { return nil }
+            return AccessibilityEventObservedAppDescriptor(
+                processIdentifier: app.processIdentifier,
+                ownerName: app.displayName
+            )
+        }
+
+        var descriptorsByPID: [Int32: AccessibilityEventObservedAppDescriptor] = [:]
+        for descriptor in snapshotDescriptors + appDescriptors {
+            descriptorsByPID[descriptor.processIdentifier] = descriptor
+        }
+        return descriptorsByPID.values.sorted { $0.processIdentifier < $1.processIdentifier }
     }
 
     private func supplementalAccessibilityWindows(
@@ -474,6 +663,661 @@ struct AXOnlyWindowCatalogPolicy {
     }
 }
 
+struct AppTabExpansionEligibilityPolicy {
+    private static let supportedBundleIdentifiers: Set<String> = [
+        "com.apple.finder",
+        "com.google.android.studio"
+    ]
+
+    private static let supportedBundleIdentifierPrefixes = [
+        "com.jetbrains."
+    ]
+
+    private static let supportedNameFragments = [
+        "IntelliJ IDEA",
+        "WebStorm",
+        "PyCharm",
+        "PhpStorm",
+        "GoLand",
+        "CLion",
+        "RubyMine",
+        "DataGrip",
+        "Rider",
+        "AppCode",
+        "Android Studio",
+        "Finder"
+    ]
+
+    static func canExpandTabs(ownerName: String?) -> Bool {
+        decision(for: AppTabExpansionAppDescriptor(ownerName: ownerName)).canExpandTabs
+    }
+
+    static func decision(for app: AppTabExpansionAppDescriptor) -> AppTabExpansionEligibilityDecision {
+        if let bundleIdentifier = app.bundleIdentifier?.nonBlankCatalogTitle?.lowercased() {
+            if supportedBundleIdentifiers.contains(bundleIdentifier) {
+                return AppTabExpansionEligibilityDecision(canExpandTabs: true, skipReason: nil)
+            }
+            if supportedBundleIdentifierPrefixes.contains(where: { bundleIdentifier.hasPrefix($0) }) {
+                return AppTabExpansionEligibilityDecision(canExpandTabs: true, skipReason: nil)
+            }
+        }
+
+        let appNames = [app.ownerName, app.localizedName].compactMap { $0?.nonBlankCatalogTitle }
+        if appNames.contains(where: isSupportedAppName) {
+            return AppTabExpansionEligibilityDecision(canExpandTabs: true, skipReason: nil)
+        }
+
+        return AppTabExpansionEligibilityDecision(
+            canExpandTabs: false,
+            skipReason: "unsupported-app-for-window-tabs"
+        )
+    }
+
+    private static func isSupportedAppName(_ appName: String) -> Bool {
+        supportedNameFragments.contains { fragment in
+            appName.localizedCaseInsensitiveContains(fragment)
+        }
+    }
+}
+
+struct AppTabExpansionAppDescriptor {
+    let bundleIdentifier: String?
+    let ownerName: String?
+    let localizedName: String?
+
+    init(
+        bundleIdentifier: String? = nil,
+        ownerName: String? = nil,
+        localizedName: String? = nil
+    ) {
+        self.bundleIdentifier = bundleIdentifier
+        self.ownerName = ownerName
+        self.localizedName = localizedName
+    }
+}
+
+struct AppTabExpansionEligibilityDecision {
+    let canExpandTabs: Bool
+    let skipReason: String?
+}
+
+enum AccessibilityTabSource: String {
+    case windowTabs = "window-tabs"
+}
+
+struct AccessibilityTabSnapshot: Equatable {
+    let index: Int
+    let title: String?
+    let isSelected: Bool
+    let source: AccessibilityTabSource
+}
+
+struct AccessibilityTabResolution {
+    let tabs: [AccessibilityTabSnapshot]
+    let source: AccessibilityTabSource?
+    let skipReason: String?
+    let durationMs: Int
+}
+
+struct AccessibilityTabResolver {
+    static func resolveTabs(in window: AXUIElement) -> AccessibilityTabResolution {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        var rawTabs: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(window, kAXTabsAttribute as CFString, &rawTabs)
+        guard error == .success else {
+            return AccessibilityTabResolution(
+                tabs: [],
+                source: nil,
+                skipReason: "direct-axtabs-unavailable",
+                durationMs: elapsedMs(since: startedAt)
+            )
+        }
+        guard let tabElements = rawTabs as? [AXUIElement], !tabElements.isEmpty else {
+            return AccessibilityTabResolution(
+                tabs: [],
+                source: .windowTabs,
+                skipReason: "no-tabs",
+                durationMs: elapsedMs(since: startedAt)
+            )
+        }
+
+        return AccessibilityTabResolution(
+            tabs: snapshots(from: tabElements, source: .windowTabs),
+            source: .windowTabs,
+            skipReason: nil,
+            durationMs: elapsedMs(since: startedAt)
+        )
+    }
+
+    private static func snapshots(
+        from tabElements: [AXUIElement],
+        source: AccessibilityTabSource
+    ) -> [AccessibilityTabSnapshot] {
+        tabElements.enumerated().map { index, element in
+            AccessibilityTabSnapshot(
+                index: index,
+                title: title(of: element),
+                isSelected: isSelected(element),
+                source: source
+            )
+        }
+    }
+
+    static func title(of element: AXUIElement) -> String? {
+        for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
+            var rawTitle: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &rawTitle) == .success else {
+                continue
+            }
+            if let title = rawTitle as? String, let normalized = title.nonBlankCatalogTitle {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    static func isSelected(_ element: AXUIElement) -> Bool {
+        var rawSelected: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedAttribute as CFString, &rawSelected) == .success else {
+            return false
+        }
+        if let selected = rawSelected as? Bool { return selected }
+        if let selected = rawSelected as? NSNumber { return selected.boolValue }
+        return false
+    }
+
+    private static func elapsedMs(since startedAt: CFAbsoluteTime) -> Int {
+        Int(((CFAbsoluteTimeGetCurrent() - startedAt) * 1_000).rounded())
+    }
+}
+
+struct TabExpansionResult {
+    let snapshots: [WindowSnapshot]
+    let didExpand: Bool
+    let fallbackReason: String?
+}
+
+struct TabExpandedWindowCatalogPolicy {
+    static func expand(
+        snapshot: WindowSnapshot,
+        tabs: [AccessibilityTabSnapshot],
+        parentFrame: WindowFrameIdentity? = nil
+    ) -> TabExpansionResult {
+        guard tabs.count > 1 else {
+            return TabExpansionResult(snapshots: [snapshot], didExpand: false, fallbackReason: "single-tab")
+        }
+
+        let usableTabs = tabs.compactMap { tab -> (AccessibilityTabSnapshot, String)? in
+            guard let title = usableTitle(tab.title) else { return nil }
+            return (tab, title)
+        }
+        guard usableTabs.count >= 2 else {
+            return TabExpansionResult(snapshots: [snapshot], didExpand: false, fallbackReason: "placeholder-title")
+        }
+
+        let expanded = usableTabs.map { tab, title in
+            WindowSnapshot(
+                identity: WindowIdentity(
+                    windowID: snapshot.identity.windowID,
+                    ownerProcessIdentifier: snapshot.identity.ownerProcessIdentifier,
+                    title: title,
+                    tab: WindowTabIdentity(
+                        parentWindowID: snapshot.identity.windowID,
+                        parentTitle: snapshot.identity.title?.nonBlankCatalogTitle,
+                        parentFrame: parentFrame,
+                        index: tab.index,
+                        title: title,
+                        isSelected: tab.isSelected
+                    )
+                ),
+                bounds: snapshot.bounds,
+                ownerName: snapshot.ownerName
+            )
+        }
+        return TabExpansionResult(snapshots: expanded, didExpand: true, fallbackReason: nil)
+    }
+
+    static func usableTitle(_ title: String?) -> String? {
+        guard let title = title?.nonBlankCatalogTitle,
+              !isPlaceholderTitle(title)
+        else { return nil }
+        return title
+    }
+
+    static func isPlaceholderTitle(_ title: String) -> Bool {
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return true }
+        if normalized.range(of: #"^창\s*\d+$"#, options: [.regularExpression]) != nil { return true }
+        if normalized.range(of: #"^Window\s*\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return true
+        }
+        return false
+    }
+}
+
+struct AccessibilityEventObservedAppDescriptor: Hashable {
+    let processIdentifier: Int32
+    let ownerName: String?
+
+    init(processIdentifier: Int32, ownerName: String? = nil) {
+        self.processIdentifier = processIdentifier
+        self.ownerName = ownerName?.nonBlankCatalogTitle
+    }
+}
+
+struct AccessibilityEventWindowCacheEntry: Equatable {
+    let processIdentifier: Int32
+    let windowID: UInt32
+    let title: String
+    let frame: CGRect
+    let ownerName: String?
+    let source: String
+    let updatedAt: Date
+
+    init(
+        processIdentifier: Int32,
+        windowID: UInt32,
+        title: String,
+        frame: CGRect,
+        ownerName: String? = nil,
+        source: String,
+        updatedAt: Date
+    ) {
+        self.processIdentifier = processIdentifier
+        self.windowID = windowID
+        self.title = title
+        self.frame = frame
+        self.ownerName = ownerName?.nonBlankCatalogTitle
+        self.source = source
+        self.updatedAt = updatedAt
+    }
+}
+
+struct AccessibilityEventWindowSnapshotPolicy {
+    static func snapshots(
+        from entries: [AccessibilityEventWindowCacheEntry],
+        eligiblePIDs: Set<Int32>,
+        excluding includedSnapshots: [WindowSnapshot]
+    ) -> [WindowSnapshot] {
+        guard !eligiblePIDs.isEmpty else { return [] }
+        let includedWindowKeys = Set(includedSnapshots.map(WindowKey.init(snapshot:)))
+
+        return entries
+            .filter { eligiblePIDs.contains($0.processIdentifier) }
+            .filter { entry in
+                guard WindowSnapshot.isReasonableWindowBounds(entry.frame),
+                      !TabExpandedWindowCatalogPolicy.isPlaceholderTitle(entry.title)
+                else { return false }
+
+                let key = WindowKey(entry: entry)
+                return !includedWindowKeys.contains(key)
+            }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            .map { entry in
+                WindowSnapshot(
+                    identity: WindowIdentity(
+                        windowID: entry.windowID,
+                        ownerProcessIdentifier: entry.processIdentifier,
+                        title: entry.title
+                    ),
+                    bounds: entry.frame,
+                    ownerName: entry.ownerName
+                )
+            }
+    }
+
+    private struct WindowKey: Hashable {
+        let processIdentifier: Int32
+        let normalizedTitle: String
+        let x: Int
+        let y: Int
+        let width: Int
+        let height: Int
+
+        init(entry: AccessibilityEventWindowCacheEntry) {
+            self.processIdentifier = entry.processIdentifier
+            self.normalizedTitle = entry.title.nonBlankCatalogTitle?.lowercased() ?? ""
+            self.x = Int(entry.frame.origin.x.rounded())
+            self.y = Int(entry.frame.origin.y.rounded())
+            self.width = Int(entry.frame.width.rounded())
+            self.height = Int(entry.frame.height.rounded())
+        }
+
+        init(snapshot: WindowSnapshot) {
+            self.processIdentifier = snapshot.identity.ownerProcessIdentifier
+            self.normalizedTitle = snapshot.identity.title?.nonBlankCatalogTitle?.lowercased() ?? ""
+            self.x = Int(snapshot.bounds.origin.x.rounded())
+            self.y = Int(snapshot.bounds.origin.y.rounded())
+            self.width = Int(snapshot.bounds.width.rounded())
+            self.height = Int(snapshot.bounds.height.rounded())
+        }
+    }
+}
+
+final class AccessibilityWindowEventCache {
+    static let shared = AccessibilityWindowEventCache()
+
+    private struct StoredWindow {
+        let entry: AccessibilityEventWindowCacheEntry
+        let element: AXUIElement
+    }
+
+    private struct ObserverRegistration {
+        let observer: AXObserver
+        let appElement: AXUIElement
+        let source: CFRunLoopSource
+    }
+
+    private static let notifications: [CFString] = [
+        kAXMainWindowChangedNotification as CFString,
+        kAXFocusedWindowChangedNotification as CFString,
+        kAXWindowCreatedNotification as CFString
+    ]
+    private static let maximumEntriesPerProcess = 32
+
+    private let lock = NSLock()
+    private var windowsByPID: [Int32: [UInt32: StoredWindow]] = [:]
+    private var observersByPID: [Int32: ObserverRegistration] = [:]
+    private var ownerNameByPID: [Int32: String] = [:]
+
+    func refreshObservers(for descriptors: [AccessibilityEventObservedAppDescriptor]) {
+        guard AXIsProcessTrusted() else {
+            removeAllObservers(reason: "accessibility-untrusted")
+            return
+        }
+
+        let desiredPIDs = Set(descriptors.map(\.processIdentifier))
+        removeObserversMissing(from: desiredPIDs)
+
+        for descriptor in descriptors {
+            if let ownerName = descriptor.ownerName {
+                setOwnerName(ownerName, for: descriptor.processIdentifier)
+            }
+            guard observersByPID[descriptor.processIdentifier] == nil else { continue }
+            addObserver(for: descriptor)
+        }
+    }
+
+    func seedCurrentWindows(for processIdentifiers: Set<Int32>) {
+        guard AXIsProcessTrusted(), !processIdentifiers.isEmpty else { return }
+        for processIdentifier in processIdentifiers.sorted() {
+            let appElement = AXUIElementCreateApplication(processIdentifier)
+            let windows = currentWindows(from: appElement, processIdentifier: processIdentifier)
+            record(windows: windows, processIdentifier: processIdentifier, source: "seed")
+            BokslTabDiagnosticLog.write(
+                "window-catalog.ax-event-cache.seed pid=\(processIdentifier) windows=\(windows.count)"
+            )
+        }
+    }
+
+    func snapshots(
+        for eligiblePIDs: Set<Int32>,
+        excluding includedSnapshots: [WindowSnapshot]
+    ) -> [WindowSnapshot] {
+        let entries = cachedEntries()
+        return AccessibilityEventWindowSnapshotPolicy.snapshots(
+            from: entries,
+            eligiblePIDs: eligiblePIDs,
+            excluding: includedSnapshots
+        )
+    }
+
+    func window(matching window: WindowIdentity, app: AppIdentity) -> AXUIElement? {
+        lock.lock()
+        let storedWindows = windowsByPID[app.processIdentifier].map { Array($0.values) } ?? []
+        lock.unlock()
+
+        guard !storedWindows.isEmpty else { return nil }
+        if let exact = storedWindows.first(where: { $0.entry.windowID == window.windowID }) {
+            return exact.element
+        }
+
+        guard let targetTitle = window.title?.nonBlankCatalogTitle else { return nil }
+        let titleMatches = storedWindows.filter {
+            $0.entry.title.nonBlankCatalogTitle == targetTitle
+        }
+        guard titleMatches.count == 1 else { return nil }
+        return titleMatches[0].element
+    }
+
+    private func addObserver(for descriptor: AccessibilityEventObservedAppDescriptor) {
+        let appElement = AXUIElementCreateApplication(descriptor.processIdentifier)
+        var rawObserver: AXObserver?
+        let createError = AXObserverCreate(
+            descriptor.processIdentifier,
+            AccessibilityWindowEventCache.observerCallback,
+            &rawObserver
+        )
+        guard createError == .success, let observer = rawObserver else {
+            BokslTabDiagnosticLog.write(
+                "window-catalog.ax-event-cache.observer failed pid=\(descriptor.processIdentifier) error=\(createError.rawValue)"
+            )
+            return
+        }
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        var addedNotifications: [String] = []
+        for notification in Self.notifications {
+            let addError = AXObserverAddNotification(observer, appElement, notification, refcon)
+            if addError == .success {
+                addedNotifications.append(notification as String)
+            } else {
+                BokslTabDiagnosticLog.write(
+                    "window-catalog.ax-event-cache.notification failed pid=\(descriptor.processIdentifier) name=\(notification) error=\(addError.rawValue)"
+                )
+            }
+        }
+
+        guard !addedNotifications.isEmpty else {
+            BokslTabDiagnosticLog.write(
+                "window-catalog.ax-event-cache.observer skipped pid=\(descriptor.processIdentifier) reason=no-notifications"
+            )
+            return
+        }
+
+        let source = AXObserverGetRunLoopSource(observer)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        observersByPID[descriptor.processIdentifier] = ObserverRegistration(
+            observer: observer,
+            appElement: appElement,
+            source: source
+        )
+        BokslTabDiagnosticLog.write(
+            "window-catalog.ax-event-cache.observer added pid=\(descriptor.processIdentifier) notifications=\(addedNotifications.joined(separator: ","))"
+        )
+    }
+
+    private static let observerCallback: AXObserverCallback = { _, element, notification, refcon in
+        guard let refcon else { return }
+        let cache = Unmanaged<AccessibilityWindowEventCache>
+            .fromOpaque(refcon)
+            .takeUnretainedValue()
+        cache.handleEvent(element: element, notification: notification as String)
+    }
+
+    private func handleEvent(element: AXUIElement, notification: String) {
+        var processIdentifier: pid_t = 0
+        let pidError = AXUIElementGetPid(element, &processIdentifier)
+        guard pidError == .success, processIdentifier > 0 else {
+            BokslTabDiagnosticLog.write(
+                "window-catalog.ax-event-cache.event skipped notification=\(notification) reason=pid-unavailable error=\(pidError.rawValue)"
+            )
+            return
+        }
+
+        let pid = Int32(processIdentifier)
+        var windows: [AXUIElement] = []
+        if isWindowElement(element) {
+            windows.append(element)
+        }
+        windows.append(contentsOf: currentWindows(
+            from: AXUIElementCreateApplication(pid),
+            processIdentifier: pid
+        ))
+        let uniqueWindows = deduplicatedElements(windows)
+        record(windows: uniqueWindows, processIdentifier: pid, source: notification)
+        BokslTabDiagnosticLog.write(
+            "window-catalog.ax-event-cache.event notification=\(notification) pid=\(pid) windows=\(uniqueWindows.count)"
+        )
+    }
+
+    private func currentWindows(
+        from appElement: AXUIElement,
+        processIdentifier: Int32
+    ) -> [AXUIElement] {
+        var windows: [AXUIElement] = []
+        var rawWindows: CFTypeRef?
+        let windowsError = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXWindowsAttribute as CFString,
+            &rawWindows
+        )
+        if windowsError == .success, let axWindows = rawWindows as? [AXUIElement] {
+            windows.append(contentsOf: axWindows)
+        }
+
+        for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            var rawWindow: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(appElement, attribute as CFString, &rawWindow)
+            guard error == .success,
+                  let rawWindow,
+                  CFGetTypeID(rawWindow) == AXUIElementGetTypeID()
+            else { continue }
+            windows.append(rawWindow as! AXUIElement)
+        }
+
+        let uniqueWindows = deduplicatedElements(windows)
+        BokslTabDiagnosticLog.write(
+            "window-catalog.ax-event-cache.current pid=\(processIdentifier) raw=\(windows.count) unique=\(uniqueWindows.count)"
+        )
+        return uniqueWindows
+    }
+
+    private func record(
+        windows: [AXUIElement],
+        processIdentifier: Int32,
+        source: String
+    ) {
+        let now = Date()
+        for window in windows {
+            guard let entry = cacheEntry(
+                for: window,
+                processIdentifier: processIdentifier,
+                source: source,
+                updatedAt: now
+            ) else { continue }
+            lock.lock()
+            var entries = windowsByPID[processIdentifier] ?? [:]
+            entries[entry.windowID] = StoredWindow(entry: entry, element: window)
+            windowsByPID[processIdentifier] = prune(entries)
+            lock.unlock()
+            BokslTabDiagnosticLog.write(
+                "window-catalog.ax-event-cache.record pid=\(processIdentifier) window=\(entry.windowID) source=\(source) title=\(entry.title.catalogDiagnosticValue) frame=\(entry.frame.catalogDiagnosticDescription)"
+            )
+        }
+    }
+
+    private func cacheEntry(
+        for window: AXUIElement,
+        processIdentifier: Int32,
+        source: String,
+        updatedAt: Date
+    ) -> AccessibilityEventWindowCacheEntry? {
+        guard let title = AccessibilityWindowSnapshot.title(of: window)?.nonBlankCatalogTitle,
+              !TabExpandedWindowCatalogPolicy.isPlaceholderTitle(title),
+              let frame = CGRect.fromAccessibilityWindow(window),
+              WindowSnapshot.isReasonableWindowBounds(frame)
+        else { return nil }
+
+        let windowID = SyntheticWindowID.accessibilityEvent(
+            processIdentifier: processIdentifier,
+            title: title,
+            frame: frame,
+            index: 0
+        )
+        return AccessibilityEventWindowCacheEntry(
+            processIdentifier: processIdentifier,
+            windowID: windowID,
+            title: title,
+            frame: frame,
+            ownerName: ownerName(for: processIdentifier),
+            source: source,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func cachedEntries() -> [AccessibilityEventWindowCacheEntry] {
+        lock.lock()
+        defer { lock.unlock() }
+        return windowsByPID.values.flatMap { $0.values.map(\.entry) }
+    }
+
+    private func setOwnerName(_ ownerName: String, for processIdentifier: Int32) {
+        lock.lock()
+        ownerNameByPID[processIdentifier] = ownerName
+        lock.unlock()
+    }
+
+    private func ownerName(for processIdentifier: Int32) -> String? {
+        lock.lock()
+        let cached = ownerNameByPID[processIdentifier]
+        lock.unlock()
+        if let cached { return cached }
+        return NSRunningApplication(processIdentifier: processIdentifier)?.localizedName
+            ?? NSRunningApplication(processIdentifier: processIdentifier)?.bundleIdentifier
+    }
+
+    private func prune(_ entries: [UInt32: StoredWindow]) -> [UInt32: StoredWindow] {
+        guard entries.count > Self.maximumEntriesPerProcess else { return entries }
+        let kept = entries.values
+            .sorted { lhs, rhs in lhs.entry.updatedAt > rhs.entry.updatedAt }
+            .prefix(Self.maximumEntriesPerProcess)
+        return Dictionary(uniqueKeysWithValues: kept.map { ($0.entry.windowID, $0) })
+    }
+
+    private func removeObserversMissing(from desiredPIDs: Set<Int32>) {
+        let stalePIDs = observersByPID.keys.filter { !desiredPIDs.contains($0) }
+        for processIdentifier in stalePIDs {
+            removeObserver(processIdentifier: processIdentifier, reason: "not-eligible")
+        }
+    }
+
+    private func removeAllObservers(reason: String) {
+        for processIdentifier in observersByPID.keys {
+            removeObserver(processIdentifier: processIdentifier, reason: reason)
+        }
+    }
+
+    private func removeObserver(processIdentifier: Int32, reason: String) {
+        guard let registration = observersByPID.removeValue(forKey: processIdentifier) else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), registration.source, .commonModes)
+        BokslTabDiagnosticLog.write(
+            "window-catalog.ax-event-cache.observer removed pid=\(processIdentifier) reason=\(reason)"
+        )
+    }
+
+    private func isWindowElement(_ element: AXUIElement) -> Bool {
+        var rawRole: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &rawRole) == .success,
+              let role = rawRole as? String
+        else { return false }
+        return role == kAXWindowRole
+    }
+
+    private func deduplicatedElements(_ elements: [AXUIElement]) -> [AXUIElement] {
+        var seen = Set<String>()
+        return elements.filter { element in
+            let title = AccessibilityWindowSnapshot.title(of: element)?.nonBlankCatalogTitle ?? ""
+            let frame = CGRect.fromAccessibilityWindow(element)?.catalogDiagnosticDescription ?? ""
+            let key = "\(title)|\(frame)"
+            return seen.insert(key).inserted
+        }
+    }
+}
+
 final class WindowTitleCache {
     struct Entry {
         let ownerProcessIdentifier: Int32
@@ -615,6 +1459,20 @@ final class WindowTitleCache {
 }
 
 enum SyntheticWindowID {
+    static func accessibilityEvent(
+        processIdentifier: Int32,
+        title: String,
+        frame: CGRect,
+        index: Int
+    ) -> UInt32 {
+        0x2000_0000 | (hash(
+            processIdentifier: processIdentifier,
+            title: title,
+            frame: frame,
+            index: index
+        ) & 0x1fff_ffff)
+    }
+
     static func axOnly(
         processIdentifier: Int32,
         title: String,
@@ -753,7 +1611,8 @@ struct WindowSnapshot {
             identity: WindowIdentity(
                 windowID: identity.windowID,
                 ownerProcessIdentifier: identity.ownerProcessIdentifier,
-                title: title
+                title: title,
+                tab: identity.tab
             ),
             bounds: bounds,
             ownerName: ownerName
@@ -765,7 +1624,11 @@ struct WindowSnapshot {
     }
 
     var diagnosticDescription: String {
-        "window=\(identity.windowID) pid=\(identity.ownerProcessIdentifier) owner=\(ownerName.catalogDiagnosticValue) title=\(identity.title.catalogDiagnosticValue) bounds=\(bounds.catalogDiagnosticDescription)"
+        if let tab = identity.tab {
+            let titleLength = identity.title?.count ?? 0
+            return "window=\(identity.windowID) pid=\(identity.ownerProcessIdentifier) owner=\(ownerName.catalogDiagnosticValue) title=<redacted> tabTitleKnown=\(identity.title?.nonBlankCatalogTitle != nil) tabTitleLength=\(titleLength) tabIndex=\(tab.index) tabSelected=\(tab.isSelected) bounds=\(bounds.catalogDiagnosticDescription)"
+        }
+        return "window=\(identity.windowID) pid=\(identity.ownerProcessIdentifier) owner=\(ownerName.catalogDiagnosticValue) title=\(identity.title.catalogDiagnosticValue) bounds=\(bounds.catalogDiagnosticDescription)"
     }
 
     var diagnosticID: String {
@@ -801,10 +1664,25 @@ enum WindowSnapshotParseResult {
 struct AccessibilityWindowSnapshot {
     let title: String?
     let frame: CGRect
+    let tabs: [AccessibilityTabSnapshot]
+    let tabSource: AccessibilityTabSource?
+    let tabSkipReason: String?
+    let tabDurationMs: Int
 
-    init(title: String?, frame: CGRect) {
+    init(
+        title: String?,
+        frame: CGRect,
+        tabs: [AccessibilityTabSnapshot] = [],
+        tabSource: AccessibilityTabSource? = nil,
+        tabSkipReason: String? = nil,
+        tabDurationMs: Int = 0
+    ) {
         self.title = title?.nonBlankCatalogTitle
         self.frame = frame
+        self.tabs = tabs
+        self.tabSource = tabSource
+        self.tabSkipReason = tabSkipReason
+        self.tabDurationMs = tabDurationMs
     }
 
     static func deduplicated(_ snapshots: [AccessibilityWindowSnapshot]) -> [AccessibilityWindowSnapshot] {
@@ -818,13 +1696,25 @@ struct AccessibilityWindowSnapshot {
         }
     }
 
-    init?(window: AXUIElement) {
+    init?(window: AXUIElement, resolveTabs: Bool = true) {
         guard let frame = CGRect.fromAccessibilityWindow(window) else { return nil }
+        let tabResolution = resolveTabs
+            ? AccessibilityTabResolver.resolveTabs(in: window)
+            : AccessibilityTabResolution(
+                tabs: [],
+                source: nil,
+                skipReason: "tab-resolution-disabled",
+                durationMs: 0
+            )
         self.title = AccessibilityWindowSnapshot.title(of: window)
         self.frame = frame
+        self.tabs = tabResolution.tabs
+        self.tabSource = tabResolution.source
+        self.tabSkipReason = tabResolution.skipReason
+        self.tabDurationMs = tabResolution.durationMs
     }
 
-    private static func title(of window: AXUIElement) -> String? {
+    static func title(of window: AXUIElement) -> String? {
         var rawTitle: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &rawTitle) == .success else {
             return nil
@@ -833,11 +1723,20 @@ struct AccessibilityWindowSnapshot {
     }
 
     var diagnosticDescription: String {
-        "title=\(title.catalogDiagnosticValue) frame=\(frame.catalogDiagnosticDescription)"
+        "title=\(title.catalogDiagnosticValue) frame=\(frame.catalogDiagnosticDescription) tabs=\(tabs.count) tabSource=\(tabSource?.rawValue ?? "missing") tabSkip=\(tabSkipReason ?? "nil")"
     }
 }
 
 private extension CGRect {
+    var windowFrameIdentity: WindowFrameIdentity {
+        WindowFrameIdentity(
+            x: Double(origin.x),
+            y: Double(origin.y),
+            width: Double(size.width),
+            height: Double(size.height)
+        )
+    }
+
     static func fromWindowInfo(_ rawBounds: Any?) -> CGRect? {
         guard let dictionary = rawBounds as? NSDictionary else { return nil }
         return CGRect(dictionaryRepresentation: dictionary as CFDictionary)

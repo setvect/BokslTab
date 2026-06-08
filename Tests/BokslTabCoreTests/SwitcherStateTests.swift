@@ -258,4 +258,43 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertNotEqual(SwitchResult.exactWindowSuccess, SwitchResult.limitedAppFallbackSuccess)
         XCTAssertEqual(SwitchResult.appActivationSuccess, .appActivationSuccess)
     }
+
+
+    func testTabWindowItemUsesStableTabIDAndParentMRUAliases() {
+        let app = AppIdentity(processIdentifier: 7, localizedName: "IDE")
+        let tab = WindowTabIdentity(parentWindowID: 42, index: 2, title: "Project C", isSelected: true)
+        let item = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(windowID: 42, ownerProcessIdentifier: 7, title: "Project C", tab: tab))
+        )
+
+        XCTAssertEqual(item.id, "tab:42:7:2")
+        XCTAssertEqual(item.title, "Project C")
+        XCTAssertEqual(item.mruProjectedIDs, ["tab:42:7:2", "window:42:7", "app:7"])
+    }
+
+
+
+    func testTabIdentityHashIgnoresSelectedSnapshotState() {
+        let selected = WindowTabIdentity(
+            parentWindowID: 42,
+            parentTitle: "IDE",
+            parentFrame: WindowFrameIdentity(x: 0, y: 0, width: 100, height: 100),
+            index: 1,
+            title: "Project",
+            isSelected: true
+        )
+        let unselected = WindowTabIdentity(
+            parentWindowID: 42,
+            parentTitle: "IDE",
+            parentFrame: WindowFrameIdentity(x: 10, y: 10, width: 100, height: 100),
+            index: 1,
+            title: "Project",
+            isSelected: false
+        )
+
+        XCTAssertEqual(selected, unselected)
+        XCTAssertEqual(Set([selected, unselected]).count, 1)
+    }
+
 }
