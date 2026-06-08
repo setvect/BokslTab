@@ -266,7 +266,11 @@ final class SwitcherCoordinator {
         let result: SwitchResult
         switch item.kind {
         case .app:
-            result = appActivator.activate(app: item.app)
+            if let appReopener = appActivator as? AppReopening {
+                result = appReopener.reopen(app: item.app)
+            } else {
+                result = appActivator.activate(app: item.app)
+            }
         case .window(let window):
             result = windowActivator.activate(window: window, app: item.app)
         }

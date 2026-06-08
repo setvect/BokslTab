@@ -21,6 +21,10 @@ public protocol AppActivating {
     func activate(app: AppIdentity) -> SwitchResult
 }
 
+public protocol AppReopening {
+    func reopen(app: AppIdentity) -> SwitchResult
+}
+
 public protocol WindowActivating {
     func activate(window: WindowIdentity, app: AppIdentity) -> SwitchResult
 }

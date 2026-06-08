@@ -5,9 +5,14 @@ import Foundation
 
 public final class MacOSAppActivator: AppActivating {
     private let options: NSApplication.ActivationOptions
+    private let workspace: NSWorkspace
 
-    public init(options: NSApplication.ActivationOptions = [.activateAllWindows]) {
+    public init(
+        options: NSApplication.ActivationOptions = [.activateAllWindows],
+        workspace: NSWorkspace = .shared
+    ) {
         self.options = options
+        self.workspace = workspace
     }
 
     public func activate(app: AppIdentity) -> SwitchResult {
@@ -22,15 +27,64 @@ public final class MacOSAppActivator: AppActivating {
     }
 }
 
+extension MacOSAppActivator: AppReopening {
+    public func reopen(app: AppIdentity) -> SwitchResult {
+        guard let runningApp = NSRunningApplication(processIdentifier: app.processIdentifier) else {
+            return .safeFailure(reason: "실행 중인 앱을 찾을 수 없습니다: pid=\(app.processIdentifier)")
+        }
+
+        let didActivate = runningApp.activate(options: options)
+        guard let bundleURL = bundleURL(for: app, runningApp: runningApp) else {
+            BokslTabDiagnosticLog.write(
+                "app-activation.reopen skipped reason=bundle-url-missing pid=\(app.processIdentifier) activated=\(didActivate)"
+            )
+            return didActivate
+                ? .appActivationSuccess
+                : .safeFailure(reason: "앱 번들 경로를 찾지 못해 다시 열 수 없습니다: \(app.displayName)")
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        workspace.openApplication(at: bundleURL, configuration: configuration) { reopenedApp, error in
+            if let error {
+                BokslTabDiagnosticLog.write(
+                    "app-activation.reopen completed result=failed pid=\(app.processIdentifier) error=\(error.localizedDescription)"
+                )
+                return
+            }
+            BokslTabDiagnosticLog.write(
+                "app-activation.reopen completed result=success requestedPID=\(app.processIdentifier) reopenedPID=\(reopenedApp?.processIdentifier ?? -1)"
+            )
+        }
+        BokslTabDiagnosticLog.write(
+            "app-activation.reopen requested pid=\(app.processIdentifier) activated=\(didActivate) bundle=\(bundleURL.path)"
+        )
+        return .appActivationSuccess
+    }
+
+    private func bundleURL(for app: AppIdentity, runningApp: NSRunningApplication) -> URL? {
+        if let bundleURL = runningApp.bundleURL {
+            return bundleURL
+        }
+        guard let bundleIdentifier = app.bundleIdentifier else { return nil }
+        return workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    }
+}
+
 public final class MacOSWindowActivator: WindowActivating {
     private let appActivator: AppActivating
+    private let isAccessibilityTrusted: () -> Bool
 
-    public init(appActivator: AppActivating = MacOSAppActivator(options: [])) {
+    public init(
+        appActivator: AppActivating = MacOSAppActivator(options: []),
+        isAccessibilityTrusted: @escaping () -> Bool = AXIsProcessTrusted
+    ) {
         self.appActivator = appActivator
+        self.isAccessibilityTrusted = isAccessibilityTrusted
     }
 
     public func activate(window: WindowIdentity, app: AppIdentity) -> SwitchResult {
-        guard AXIsProcessTrusted() else {
+        guard isAccessibilityTrusted() else {
             return fallbackToApp(app: app, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
         }
 
@@ -207,7 +261,20 @@ public final class MacOSWindowActivator: WindowActivating {
     }
 
     private func fallbackToApp(app: AppIdentity, reason: String) -> SwitchResult {
-        switch appActivator.activate(app: app) {
+        let activationResult: SwitchResult
+        if let appReopener = appActivator as? AppReopening {
+            BokslTabDiagnosticLog.write(
+                "window-activation.fallback reopen pid=\(app.processIdentifier) reason=\(reason)"
+            )
+            activationResult = appReopener.reopen(app: app)
+        } else {
+            BokslTabDiagnosticLog.write(
+                "window-activation.fallback activate pid=\(app.processIdentifier) reason=\(reason)"
+            )
+            activationResult = appActivator.activate(app: app)
+        }
+
+        switch activationResult {
         case .appActivationSuccess, .exactWindowSuccess, .limitedAppFallbackSuccess:
             return .limitedAppFallbackSuccess
         case .safeFailure(let activationReason):
