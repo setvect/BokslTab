@@ -17,12 +17,19 @@ public extension WindowCatalogProviding {
     }
 }
 
-public protocol AppActivating {
-    func activate(app: AppIdentity) -> SwitchResult
+public enum AppActivationIntent: Sendable {
+    case focusOnly
+    case reopenIfNeeded
 }
 
-public protocol AppReopening {
-    func reopen(app: AppIdentity) -> SwitchResult
+public protocol AppActivating {
+    func activate(app: AppIdentity, intent: AppActivationIntent) -> SwitchResult
+}
+
+public extension AppActivating {
+    func activate(app: AppIdentity) -> SwitchResult {
+        activate(app: app, intent: .focusOnly)
+    }
 }
 
 public protocol WindowActivating {

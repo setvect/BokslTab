@@ -269,6 +269,10 @@ enum SwitcherKeyboardMapper {
         triggerModifier: SwitcherTriggerModifier = .option
     ) -> SwitcherKeyboardAction? {
         if event.type == .flagsChanged {
+            if triggerModifier.isStillPressed(in: event.modifierFlags),
+               event.isShiftPressEvent {
+                return .previous
+            }
             guard triggerModifier.isRelevantFlagsChangedEvent(event) else { return nil }
             return triggerModifier.isStillPressed(in: event.modifierFlags) ? nil : .modifierReleased
         }
@@ -287,6 +291,12 @@ enum SwitcherKeyboardMapper {
         default:
             return nil
         }
+    }
+}
+
+private extension NSEvent {
+    var isShiftPressEvent: Bool {
+        (keyCode == 56 || keyCode == 60) && modifierFlags.contains(.shift)
     }
 }
 

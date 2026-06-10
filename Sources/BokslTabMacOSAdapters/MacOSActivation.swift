@@ -15,7 +15,16 @@ public final class MacOSAppActivator: AppActivating {
         self.workspace = workspace
     }
 
-    public func activate(app: AppIdentity) -> SwitchResult {
+    public func activate(app: AppIdentity, intent: AppActivationIntent) -> SwitchResult {
+        switch intent {
+        case .focusOnly:
+            return focus(app: app)
+        case .reopenIfNeeded:
+            return reopen(app: app)
+        }
+    }
+
+    private func focus(app: AppIdentity) -> SwitchResult {
         guard let runningApp = NSRunningApplication(processIdentifier: app.processIdentifier) else {
             return .safeFailure(reason: "실행 중인 앱을 찾을 수 없습니다: pid=\(app.processIdentifier)")
         }
@@ -25,10 +34,7 @@ public final class MacOSAppActivator: AppActivating {
             ? .appActivationSuccess
             : .safeFailure(reason: "앱 활성화에 실패했습니다: \(app.displayName)")
     }
-}
-
-extension MacOSAppActivator: AppReopening {
-    public func reopen(app: AppIdentity) -> SwitchResult {
+    private func reopen(app: AppIdentity) -> SwitchResult {
         guard let runningApp = NSRunningApplication(processIdentifier: app.processIdentifier) else {
             return .safeFailure(reason: "실행 중인 앱을 찾을 수 없습니다: pid=\(app.processIdentifier)")
         }
@@ -85,7 +91,7 @@ public final class MacOSWindowActivator: WindowActivating {
 
     public func activate(window: WindowIdentity, app: AppIdentity) -> SwitchResult {
         guard isAccessibilityTrusted() else {
-            return fallbackToApp(app: app, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
+            return fallbackToApp(app: app, intent: .focusOnly, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
         }
 
         if window.tab != nil {
@@ -95,7 +101,11 @@ public final class MacOSWindowActivator: WindowActivating {
         guard let axWindow = findExactlyMatchedAXWindow(matching: window, app: app)
             ?? findCachedAXWindow(matching: window, app: app)
         else {
-            return fallbackToApp(app: app, reason: "대상 창을 정확히 식별하지 못해 앱 활성화로 대체했습니다.")
+            return fallbackToApp(
+                app: app,
+                intent: fallbackIntent(for: window),
+                reason: "대상 창을 정확히 식별하지 못해 앱 활성화로 대체했습니다."
+            )
         }
 
         _ = appActivator.activate(app: app)
@@ -104,12 +114,12 @@ public final class MacOSWindowActivator: WindowActivating {
         if raiseError == .success {
             return .exactWindowSuccess
         }
-        return fallbackToApp(app: app, reason: "창 올리기 액션이 실패해 앱 활성화로 대체했습니다: \(raiseError.rawValue)")
+        return fallbackToApp(app: app, intent: .focusOnly, reason: "창 올리기 액션이 실패해 앱 활성화로 대체했습니다: \(raiseError.rawValue)")
     }
 
     private func activateTab(window: WindowIdentity, app: AppIdentity) -> SwitchResult {
         guard let targetTab = window.tab else {
-            return fallbackToApp(app: app, reason: "탭 메타데이터가 없어 앱 활성화로 대체했습니다.")
+            return fallbackToApp(app: app, intent: .focusOnly, reason: "탭 메타데이터가 없어 앱 활성화로 대체했습니다.")
         }
 
         BokslTabDiagnosticLog.write(
@@ -120,7 +130,7 @@ public final class MacOSWindowActivator: WindowActivating {
             BokslTabDiagnosticLog.write(
                 "window-activation.ax.tab.match result=missing pid=\(app.processIdentifier) parentWindow=\(targetTab.parentWindowID) index=\(targetTab.index)"
             )
-            return fallbackToApp(app: app, reason: "대상 탭을 식별하지 못해 앱 활성화로 대체했습니다.")
+            return fallbackToApp(app: app, intent: .focusOnly, reason: "대상 탭을 식별하지 못해 앱 활성화로 대체했습니다.")
         }
 
         BokslTabDiagnosticLog.write(
@@ -140,6 +150,7 @@ public final class MacOSWindowActivator: WindowActivating {
             }
             return fallbackToApp(
                 app: app,
+                intent: .focusOnly,
                 reason: "탭 선택 또는 창 올리기 액션이 실패해 앱 활성화로 대체했습니다: select=\(selection.success), raise=\(raiseError.rawValue)"
             )
         }
@@ -254,25 +265,22 @@ public final class MacOSWindowActivator: WindowActivating {
     }
 
     private func frame(of window: AXUIElement) -> CGRect? {
-        guard let origin = CGPoint.fromAccessibilityValue(window, attribute: kAXPositionAttribute),
-              let size = CGSize.fromAccessibilityValue(window, attribute: kAXSizeAttribute)
-        else { return nil }
-        return CGRect(origin: origin, size: size)
+        AXElementReader.frame(of: window)
     }
 
-    private func fallbackToApp(app: AppIdentity, reason: String) -> SwitchResult {
-        let activationResult: SwitchResult
-        if let appReopener = appActivator as? AppReopening {
-            BokslTabDiagnosticLog.write(
-                "window-activation.fallback reopen pid=\(app.processIdentifier) reason=\(reason)"
-            )
-            activationResult = appReopener.reopen(app: app)
-        } else {
-            BokslTabDiagnosticLog.write(
-                "window-activation.fallback activate pid=\(app.processIdentifier) reason=\(reason)"
-            )
-            activationResult = appActivator.activate(app: app)
-        }
+    private func fallbackIntent(for window: WindowIdentity) -> AppActivationIntent {
+        window.source == .cached ? .reopenIfNeeded : .focusOnly
+    }
+
+    private func fallbackToApp(
+        app: AppIdentity,
+        intent: AppActivationIntent,
+        reason: String
+    ) -> SwitchResult {
+        BokslTabDiagnosticLog.write(
+            "window-activation.fallback intent=\(intent) pid=\(app.processIdentifier) reason=\(reason)"
+        )
+        let activationResult = appActivator.activate(app: app, intent: intent)
 
         switch activationResult {
         case .appActivationSuccess, .exactWindowSuccess, .limitedAppFallbackSuccess:
@@ -377,26 +385,14 @@ struct AXTabElementSnapshot {
     }
 
     private static func title(of element: AXUIElement) -> String? {
-        for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
-            var rawTitle: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &rawTitle) == .success else {
-                continue
-            }
-            if let title = (rawTitle as? String)?.nonBlankForAdapter {
-                return title
-            }
-        }
-        return nil
+        AXElementReader.firstString(
+            from: element,
+            attributes: [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute]
+        )
     }
 
     private static func isSelected(_ element: AXUIElement) -> Bool {
-        var rawSelected: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedAttribute as CFString, &rawSelected) == .success else {
-            return false
-        }
-        if let selected = rawSelected as? Bool { return selected }
-        if let selected = rawSelected as? NSNumber { return selected.boolValue }
-        return false
+        AXElementReader.bool(from: element, attribute: kAXSelectedAttribute)
     }
 }
 
@@ -469,33 +465,5 @@ private extension WindowFrameIdentity {
             width: CGFloat(width),
             height: CGFloat(height)
         )
-    }
-}
-
-private extension CGPoint {
-    static func fromAccessibilityValue(_ element: AXUIElement, attribute: String) -> CGPoint? {
-        var rawValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &rawValue) == .success,
-              let value = rawValue,
-              CFGetTypeID(value) == AXValueGetTypeID()
-        else { return nil }
-
-        var point = CGPoint.zero
-        guard AXValueGetValue(value as! AXValue, .cgPoint, &point) else { return nil }
-        return point
-    }
-}
-
-private extension CGSize {
-    static func fromAccessibilityValue(_ element: AXUIElement, attribute: String) -> CGSize? {
-        var rawValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &rawValue) == .success,
-              let value = rawValue,
-              CFGetTypeID(value) == AXValueGetTypeID()
-        else { return nil }
-
-        var size = CGSize.zero
-        guard AXValueGetValue(value as! AXValue, .cgSize, &size) else { return nil }
-        return size
     }
 }

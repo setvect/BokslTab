@@ -41,6 +41,45 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         )
     }
 
+    func testShiftPressWhileTriggerModifierIsHeldMovesPrevious() {
+        XCTAssertEqual(
+            SwitcherKeyboardMapper.action(
+                for: flagsChangedEvent(keyCode: 56, modifiers: [.command, .shift]),
+                triggerModifier: .command
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            SwitcherKeyboardMapper.action(
+                for: flagsChangedEvent(keyCode: 60, modifiers: [.command, .shift]),
+                triggerModifier: .command
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            SwitcherKeyboardMapper.action(
+                for: flagsChangedEvent(keyCode: 56, modifiers: [.option, .shift]),
+                triggerModifier: .option
+            ),
+            .previous
+        )
+    }
+
+    func testShiftPressWithoutTriggerModifierIsIgnored() {
+        XCTAssertNil(
+            SwitcherKeyboardMapper.action(
+                for: flagsChangedEvent(keyCode: 56, modifiers: [.shift]),
+                triggerModifier: .command
+            )
+        )
+        XCTAssertNil(
+            SwitcherKeyboardMapper.action(
+                for: flagsChangedEvent(keyCode: 56, modifiers: [.command]),
+                triggerModifier: .command
+            )
+        )
+    }
+
     func testPanelMetricsUsesScrollOnlyAtThresholdWhenReadable() {
         let largeScreen = CGSize(width: 1600, height: 2000)
 

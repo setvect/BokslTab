@@ -79,22 +79,32 @@ public struct WindowFrameIdentity: Hashable, Sendable {
     }
 }
 
+public enum WindowIdentitySource: String, Hashable, Sendable {
+    case coreGraphics
+    case accessibilityOnly
+    case accessibilityEvent
+    case cached
+}
+
 public struct WindowIdentity: Hashable, Sendable {
     public let windowID: UInt32
     public let ownerProcessIdentifier: Int32
     public let title: String?
     public let tab: WindowTabIdentity?
+    public let source: WindowIdentitySource
 
     public init(
         windowID: UInt32,
         ownerProcessIdentifier: Int32,
         title: String? = nil,
-        tab: WindowTabIdentity? = nil
+        tab: WindowTabIdentity? = nil,
+        source: WindowIdentitySource = .coreGraphics
     ) {
         self.windowID = windowID
         self.ownerProcessIdentifier = ownerProcessIdentifier
         self.title = title
         self.tab = tab
+        self.source = source
     }
 }
 

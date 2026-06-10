@@ -653,7 +653,8 @@ struct AXOnlyWindowCatalogPolicy {
                             index: index
                         ),
                         ownerProcessIdentifier: app.processIdentifier,
-                        title: title
+                        title: title,
+                        source: .accessibilityOnly
                     ),
                     bounds: axSnapshot.frame,
                     ownerName: app.displayName
@@ -804,26 +805,14 @@ struct AccessibilityTabResolver {
     }
 
     static func title(of element: AXUIElement) -> String? {
-        for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
-            var rawTitle: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &rawTitle) == .success else {
-                continue
-            }
-            if let title = rawTitle as? String, let normalized = title.nonBlankCatalogTitle {
-                return normalized
-            }
-        }
-        return nil
+        AXElementReader.firstString(
+            from: element,
+            attributes: [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute]
+        )
     }
 
     static func isSelected(_ element: AXUIElement) -> Bool {
-        var rawSelected: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedAttribute as CFString, &rawSelected) == .success else {
-            return false
-        }
-        if let selected = rawSelected as? Bool { return selected }
-        if let selected = rawSelected as? NSNumber { return selected.boolValue }
-        return false
+        AXElementReader.bool(from: element, attribute: kAXSelectedAttribute)
     }
 
     private static func elapsedMs(since startedAt: CFAbsoluteTime) -> Int {
@@ -868,7 +857,8 @@ struct TabExpandedWindowCatalogPolicy {
                         index: tab.index,
                         title: title,
                         isSelected: tab.isSelected
-                    )
+                    ),
+                    source: snapshot.identity.source
                 ),
                 bounds: snapshot.bounds,
                 ownerName: snapshot.ownerName
@@ -961,7 +951,8 @@ struct AccessibilityEventWindowSnapshotPolicy {
                     identity: WindowIdentity(
                         windowID: entry.windowID,
                         ownerProcessIdentifier: entry.processIdentifier,
-                        title: entry.title
+                        title: entry.title,
+                        source: .accessibilityEvent
                     ),
                     bounds: entry.frame,
                     ownerName: entry.ownerName
@@ -1228,7 +1219,7 @@ final class AccessibilityWindowEventCache {
     ) -> AccessibilityEventWindowCacheEntry? {
         guard let title = AccessibilityWindowSnapshot.title(of: window)?.nonBlankCatalogTitle,
               !TabExpandedWindowCatalogPolicy.isPlaceholderTitle(title),
-              let frame = CGRect.fromAccessibilityWindow(window),
+              let frame = AXElementReader.frame(of: window),
               WindowSnapshot.isReasonableWindowBounds(frame)
         else { return nil }
 
@@ -1311,7 +1302,7 @@ final class AccessibilityWindowEventCache {
         var seen = Set<String>()
         return elements.filter { element in
             let title = AccessibilityWindowSnapshot.title(of: element)?.nonBlankCatalogTitle ?? ""
-            let frame = CGRect.fromAccessibilityWindow(element)?.catalogDiagnosticDescription ?? ""
+            let frame = AXElementReader.frame(of: element)?.catalogDiagnosticDescription ?? ""
             let key = "\(title)|\(frame)"
             return seen.insert(key).inserted
         }
@@ -1380,7 +1371,8 @@ final class WindowTitleCache {
                         index: index
                     ),
                     ownerProcessIdentifier: entry.ownerProcessIdentifier,
-                    title: entry.title
+                    title: entry.title,
+                    source: .cached
                 ),
                 bounds: entry.bounds,
                 ownerName: entry.ownerName ?? app.displayName
@@ -1612,7 +1604,8 @@ struct WindowSnapshot {
                 windowID: identity.windowID,
                 ownerProcessIdentifier: identity.ownerProcessIdentifier,
                 title: title,
-                tab: identity.tab
+                tab: identity.tab,
+                source: identity.source
             ),
             bounds: bounds,
             ownerName: ownerName
@@ -1697,7 +1690,7 @@ struct AccessibilityWindowSnapshot {
     }
 
     init?(window: AXUIElement, resolveTabs: Bool = true) {
-        guard let frame = CGRect.fromAccessibilityWindow(window) else { return nil }
+        guard let frame = AXElementReader.frame(of: window) else { return nil }
         let tabResolution = resolveTabs
             ? AccessibilityTabResolver.resolveTabs(in: window)
             : AccessibilityTabResolution(
@@ -1742,13 +1735,6 @@ private extension CGRect {
         return CGRect(dictionaryRepresentation: dictionary as CFDictionary)
     }
 
-    static func fromAccessibilityWindow(_ window: AXUIElement) -> CGRect? {
-        guard let origin = CGPoint.fromAccessibilityValue(window, attribute: kAXPositionAttribute),
-              let size = CGSize.fromAccessibilityValue(window, attribute: kAXSizeAttribute)
-        else { return nil }
-        return CGRect(origin: origin, size: size)
-    }
-
     func frameDistance(to other: CGRect) -> CGFloat {
         abs(minX - other.minX)
             + abs(minY - other.minY)
@@ -1781,34 +1767,6 @@ private extension CGRect {
 
     var catalogDiagnosticDescription: String {
         "x=\(Int(origin.x)),y=\(Int(origin.y)),w=\(Int(size.width)),h=\(Int(size.height))"
-    }
-}
-
-private extension CGPoint {
-    static func fromAccessibilityValue(_ window: AXUIElement, attribute: String) -> CGPoint? {
-        var rawValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, attribute as CFString, &rawValue) == .success,
-              let value = rawValue,
-              CFGetTypeID(value) == AXValueGetTypeID(),
-              AXValueGetType(value as! AXValue) == .cgPoint
-        else { return nil }
-
-        var point = CGPoint.zero
-        return AXValueGetValue(value as! AXValue, .cgPoint, &point) ? point : nil
-    }
-}
-
-private extension CGSize {
-    static func fromAccessibilityValue(_ window: AXUIElement, attribute: String) -> CGSize? {
-        var rawValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, attribute as CFString, &rawValue) == .success,
-              let value = rawValue,
-              CFGetTypeID(value) == AXValueGetTypeID(),
-              AXValueGetType(value as! AXValue) == .cgSize
-        else { return nil }
-
-        var size = CGSize.zero
-        return AXValueGetValue(value as! AXValue, .cgSize, &size) ? size : nil
     }
 }
 
