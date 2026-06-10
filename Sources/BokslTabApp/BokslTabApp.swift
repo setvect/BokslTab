@@ -158,7 +158,7 @@ final class SwitcherCoordinator {
         try hotkeyService.start(definitions: definitions) { [weak self] mode in
             BokslTabDiagnosticLog.write("coordinator.hotkeyReceived mode=\(mode.rawValue)")
             DispatchQueue.main.async {
-                self?.show(mode: mode)
+                self?.show(mode: mode, expectsModifierRelease: true)
             }
         }
     }
@@ -212,11 +212,12 @@ final class SwitcherCoordinator {
         hotkeyService.stop()
     }
 
-    func show(mode: SwitcherMode) {
+    func show(mode: SwitcherMode, expectsModifierRelease: Bool = false) {
         BokslTabDiagnosticLog.write("coordinator.show requested mode=\(mode.rawValue) panelVisible=\(panelController.isVisible)")
         if panelController.isVisible, state.mode == mode {
             state.moveNext()
             panelController.update(state: state, warning: currentWarning)
+            panelController.setExpectsModifierRelease(expectsModifierRelease)
             return
         }
 
@@ -228,13 +229,14 @@ final class SwitcherCoordinator {
             selectedIndex: presentation.selectedIndex
         )
         currentWarning = permissionWarning(for: mode) ?? startupWarning
-        panelController.show(state: state, warning: currentWarning)
+        panelController.show(
+            state: state,
+            warning: currentWarning,
+            expectsModifierRelease: expectsModifierRelease
+        )
     }
 
     private func handle(action: SwitcherKeyboardAction) {
-        BokslTabDiagnosticLog.write(
-            "coordinator.keyboardAction action=\(action.diagnosticDescription) panelVisible=\(panelController.isVisible) selectedIndex=\(state.selectedIndex) items=\(state.items.count)"
-        )
         switch action {
         case .next:
             state.moveNext()
@@ -261,14 +263,10 @@ final class SwitcherCoordinator {
 
     private func activateSelectedItem() {
         guard let item = state.selectedItem else {
-            BokslTabDiagnosticLog.write("coordinator.activateSelectedItem skipped reason=no-selected-item items=\(state.items.count) selectedIndex=\(state.selectedIndex)")
             cancelAndRestoreFocus()
             return
         }
 
-        BokslTabDiagnosticLog.write(
-            "coordinator.activateSelectedItem begin itemID=\(item.id) title=\(item.title.diagnosticValue) appPID=\(item.app.processIdentifier)"
-        )
         panelController.hide()
         previousFrontmostApp = nil
         let result: SwitchResult
@@ -279,9 +277,6 @@ final class SwitcherCoordinator {
             result = windowActivator.activate(window: window, app: item.app)
         }
         recordActivatedItem(item, result: result)
-        BokslTabDiagnosticLog.write(
-            "coordinator.activateSelectedItem result=\(result.diagnosticDescription) itemID=\(item.id) title=\(item.title.diagnosticValue)"
-        )
         reportSwitchResult(result)
     }
 
@@ -409,49 +404,5 @@ final class SwitcherCoordinator {
 
     private func icon(for app: AppIdentity) -> NSImage? {
         NSRunningApplication(processIdentifier: app.processIdentifier)?.icon
-    }
-}
-
-private extension SwitcherKeyboardAction {
-    var diagnosticDescription: String {
-        switch self {
-        case .next:
-            return "next"
-        case .previous:
-            return "previous"
-        case .confirm:
-            return "confirm"
-        case .cancel:
-            return "cancel"
-        case .modifierReleased:
-            return "modifierReleased"
-        case .focusLost:
-            return "focusLost"
-        case .select(let index):
-            return "select(\(index))"
-        case .activate(let index):
-            return "activate(\(index))"
-        }
-    }
-}
-
-private extension SwitchResult {
-    var diagnosticDescription: String {
-        switch self {
-        case .exactWindowSuccess:
-            return "exactWindowSuccess"
-        case .limitedAppFallbackSuccess:
-            return "limitedAppFallbackSuccess"
-        case .appActivationSuccess:
-            return "appActivationSuccess"
-        case .safeFailure(let reason):
-            return "safeFailure(\(reason.diagnosticValue))"
-        }
-    }
-}
-
-private extension String {
-    var diagnosticValue: String {
-        replacingOccurrences(of: "\n", with: "\\n")
     }
 }

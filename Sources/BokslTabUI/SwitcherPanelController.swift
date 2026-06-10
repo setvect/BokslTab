@@ -45,16 +45,17 @@ public final class SwitcherPanelController {
         panels.contains { $0.isVisible }
     }
 
-    public func show(state: SwitcherState, warning: String?) {
-        diagnosticLog(
-            "panel.show begin mode=\(state.mode.rawValue) items=\(state.items.count) selectedIndex=\(state.selectedIndex) visibleBefore=\(isVisible)"
-        )
+    public func show(
+        state: SwitcherState,
+        warning: String?,
+        expectsModifierRelease: Bool = false
+    ) {
         configurePanelsForCurrentScreens()
         update(state: state, warning: warning)
         positionPanels(state: state, warning: warning)
         installKeyEventMonitorIfNeeded()
         installAppDidResignActiveObserverIfNeeded()
-        startModifierReleaseFallbackIfNeeded()
+        setExpectsModifierRelease(expectsModifierRelease)
 
         guard let primaryPanel else { return }
         for panel in mirrorPanels {
@@ -67,9 +68,6 @@ public final class SwitcherPanelController {
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
-        diagnosticLog(
-            "panel.show ready mode=\(state.mode.rawValue) trigger=\(triggerModifier.diagnosticDescription) keyWindow=\(NSApp.keyWindow == primaryPanel) mainWindow=\(NSApp.mainWindow == primaryPanel) monitorInstalled=\(keyEventMonitor != nil)"
-        )
     }
 
     public func update(state: SwitcherState, warning: String?) {
@@ -99,17 +97,23 @@ public final class SwitcherPanelController {
         restoreFramesAfterContentUpdate(framesBeforeUpdate)
     }
 
+    public func setExpectsModifierRelease(_ expectsModifierRelease: Bool) {
+        if expectsModifierRelease {
+            startModifierReleaseFallbackIfNeeded()
+        } else {
+            stopModifierReleaseFallback()
+        }
+    }
+
     public func hide() {
-        diagnosticLog("panel.hide begin visible=\(isVisible)")
         isHidingProgrammatically = true
         for panel in panels {
             panel.orderOut(nil)
         }
         isHidingProgrammatically = false
-        stopModifierReleaseFallback(reason: "panel-hidden")
+        stopModifierReleaseFallback()
         removeKeyEventMonitor()
         removeAppDidResignActiveObserver()
-        diagnosticLog("panel.hide end visible=\(isVisible)")
     }
 
     private var primaryPanel: SwitcherPanelWindow? {
@@ -144,30 +148,22 @@ public final class SwitcherPanelController {
     }
 
     private func installKeyEventMonitorIfNeeded() {
-        guard keyEventMonitor == nil else {
-            diagnosticLog("panel.monitor install skipped reason=already-installed")
-            return
-        }
+        guard keyEventMonitor == nil else { return }
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
             return self.handleMonitoredEvent(event)
         }
-        diagnosticLog("panel.monitor installed events=keyDown+flagsChanged")
     }
 
     private func removeKeyEventMonitor() {
         if let keyEventMonitor {
             NSEvent.removeMonitor(keyEventMonitor)
             self.keyEventMonitor = nil
-            diagnosticLog("panel.monitor removed")
         }
     }
 
     private func installAppDidResignActiveObserverIfNeeded() {
-        guard appDidResignActiveObserver == nil else {
-            diagnosticLog("panel.focus observer install skipped reason=already-installed")
-            return
-        }
+        guard appDidResignActiveObserver == nil else { return }
         appDidResignActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification,
             object: NSApp,
@@ -177,22 +173,17 @@ public final class SwitcherPanelController {
                 self?.handleFocusLost()
             }
         }
-        diagnosticLog("panel.focus observer installed")
     }
 
     private func removeAppDidResignActiveObserver() {
         if let appDidResignActiveObserver {
             NotificationCenter.default.removeObserver(appDidResignActiveObserver)
             self.appDidResignActiveObserver = nil
-            diagnosticLog("panel.focus observer removed")
         }
     }
 
     private func startModifierReleaseFallbackIfNeeded() {
-        guard modifierReleaseFallbackTimer == nil else {
-            diagnosticLog("panel.releaseFallback start skipped reason=already-running")
-            return
-        }
+        guard modifierReleaseFallbackTimer == nil else { return }
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.checkModifierReleaseFallback()
@@ -200,55 +191,37 @@ public final class SwitcherPanelController {
         }
         modifierReleaseFallbackTimer = timer
         RunLoop.main.add(timer, forMode: .common)
-        diagnosticLog("panel.releaseFallback started interval=0.05")
     }
 
-    private func stopModifierReleaseFallback(reason: String) {
+    private func stopModifierReleaseFallback() {
         guard let modifierReleaseFallbackTimer else { return }
         modifierReleaseFallbackTimer.invalidate()
         self.modifierReleaseFallbackTimer = nil
-        diagnosticLog("panel.releaseFallback stopped reason=\(reason)")
     }
 
     private func checkModifierReleaseFallback() {
         guard isVisible else {
-            stopModifierReleaseFallback(reason: "not-visible")
+            stopModifierReleaseFallback()
             return
         }
 
         let flags = currentModifierFlags()
         guard let action = triggerModifier.modifierReleaseFallbackAction(currentFlags: flags) else { return }
 
-        diagnosticLog(
-            "panel.releaseFallback action=\(action.diagnosticDescription) flags=\(flags.bokslTabDiagnosticDescription) trigger=\(triggerModifier.diagnosticDescription)"
-        )
+        stopModifierReleaseFallback()
+        diagnosticLog("panel.releaseFallback action=modifierReleased")
         onAction(action)
     }
 
     private func handleFocusLost() {
         guard isVisible, !isHidingProgrammatically else { return }
-        diagnosticLog("panel.focusLost visible=\(isVisible) hidingProgrammatically=\(isHidingProgrammatically)")
         onAction(.focusLost)
     }
 
     private func handleMonitoredEvent(_ event: NSEvent) -> NSEvent? {
-        let eventDescription = event.bokslTabDiagnosticDescription(triggerModifier: triggerModifier)
-        guard let primaryPanel, primaryPanel.isVisible else {
-            diagnosticLog("panel.event ignored reason=no-visible-primary \(eventDescription)")
-            return event
-        }
-        let isPanelEvent = event.window == primaryPanel || NSApp.keyWindow == primaryPanel
-        guard isPanelEvent else {
-            diagnosticLog(
-                "panel.event ignored reason=window-mismatch \(eventDescription) eventWindowIsPrimary=\(event.window == primaryPanel) keyWindowIsPrimary=\(NSApp.keyWindow == primaryPanel)"
-            )
-            return event
-        }
-        guard let action = SwitcherKeyboardMapper.action(for: event, triggerModifier: triggerModifier) else {
-            diagnosticLog("panel.event ignored reason=no-action \(eventDescription)")
-            return event
-        }
-        diagnosticLog("panel.event action=\(action.diagnosticDescription) \(eventDescription)")
+        guard let primaryPanel, primaryPanel.isVisible else { return event }
+        guard event.window == primaryPanel || NSApp.keyWindow == primaryPanel else { return event }
+        guard let action = SwitcherKeyboardMapper.action(for: event, triggerModifier: triggerModifier) else { return event }
         onAction(action)
         return nil
     }
@@ -347,17 +320,6 @@ enum SwitcherTriggerModifier: Equatable, Sendable {
     }
 }
 
-private extension SwitcherTriggerModifier {
-    var diagnosticDescription: String {
-        switch self {
-        case .option:
-            return "option"
-        case .command:
-            return "command"
-        }
-    }
-}
-
 enum SwitcherKeyboardMapper {
     static func action(
         for event: NSEvent,
@@ -389,63 +351,9 @@ enum SwitcherKeyboardMapper {
     }
 }
 
-private extension SwitcherKeyboardAction {
-    var diagnosticDescription: String {
-        switch self {
-        case .next:
-            return "next"
-        case .previous:
-            return "previous"
-        case .confirm:
-            return "confirm"
-        case .cancel:
-            return "cancel"
-        case .modifierReleased:
-            return "modifierReleased"
-        case .focusLost:
-            return "focusLost"
-        case .select(let index):
-            return "select(\(index))"
-        case .activate(let index):
-            return "activate(\(index))"
-        }
-    }
-}
-
 private extension NSEvent {
     var isShiftPressEvent: Bool {
         (keyCode == 56 || keyCode == 60) && modifierFlags.contains(.shift)
-    }
-
-    func bokslTabDiagnosticDescription(triggerModifier: SwitcherTriggerModifier) -> String {
-        "type=\(type.bokslTabDiagnosticDescription) keyCode=\(keyCode) flags=\(modifierFlags.bokslTabDiagnosticDescription) trigger=\(triggerModifier.diagnosticDescription) triggerPressed=\(triggerModifier.isStillPressed(in: modifierFlags)) shiftPress=\(isShiftPressEvent)"
-    }
-}
-
-private extension NSEvent.EventType {
-    var bokslTabDiagnosticDescription: String {
-        switch self {
-        case .keyDown:
-            return "keyDown"
-        case .keyUp:
-            return "keyUp"
-        case .flagsChanged:
-            return "flagsChanged"
-        default:
-            return "type(\(rawValue))"
-        }
-    }
-}
-
-private extension NSEvent.ModifierFlags {
-    var bokslTabDiagnosticDescription: String {
-        var parts: [String] = []
-        if contains(.command) { parts.append("command") }
-        if contains(.option) { parts.append("option") }
-        if contains(.control) { parts.append("control") }
-        if contains(.shift) { parts.append("shift") }
-        if contains(.function) { parts.append("fn") }
-        return parts.isEmpty ? "none" : parts.joined(separator: "+")
     }
 }
 
