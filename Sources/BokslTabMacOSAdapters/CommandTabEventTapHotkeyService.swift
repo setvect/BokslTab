@@ -4,6 +4,7 @@ import Foundation
 
 enum CommandTabEventTapMatcher {
     static let tabKeyCode: Int64 = 48
+    static let modifierKeyCodes: Set<Int64> = [54, 55, 56, 58, 60, 61]
 
     static func shouldCapture(
         keyCode: Int64,
@@ -27,6 +28,10 @@ private enum CommandTabEventTapStatus {
 enum CommandTabEventTapConfiguration {
     static let location = CGEventTapLocation.cghidEventTap
     static let locationDescription = "cghidEventTap"
+    static let observedEventTypes: [CGEventType] = [.keyDown, .keyUp, .flagsChanged]
+    static let eventsOfInterest = observedEventTypes.reduce(CGEventMask(0)) { mask, type in
+        mask | CGEventMask(1 << type.rawValue)
+    }
 }
 
 public protocol CommandTabEventTapHotkeyServicing: AnyObject {
@@ -69,12 +74,11 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
         self.definition = definition
         self.onTrigger = onTrigger
 
-        let eventsOfInterest = CGEventMask(1 << CGEventType.keyDown.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: CommandTabEventTapConfiguration.location,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: eventsOfInterest,
+            eventsOfInterest: CommandTabEventTapConfiguration.eventsOfInterest,
             callback: CommandTabEventTapHotkeyService.eventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
@@ -132,10 +136,12 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
             return false
         }
 
-        guard type == .keyDown, let definition else { return false }
+        guard let definition else { return false }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
-        let isDiagnosticCandidate = keyCode == CommandTabEventTapMatcher.tabKeyCode || flags.contains(.maskCommand)
+        let isDiagnosticCandidate = keyCode == CommandTabEventTapMatcher.tabKeyCode
+            || CommandTabEventTapMatcher.modifierKeyCodes.contains(keyCode)
+            || flags.contains(.maskCommand)
         let shouldCapture = CommandTabEventTapMatcher.shouldCapture(
             keyCode: keyCode,
             flags: flags,
@@ -143,10 +149,10 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
         )
         if isDiagnosticCandidate {
             BokslTabDiagnosticLog.write(
-                "eventtap.keyDown keyCode=\(keyCode) flags=\(flags.bokslTabDiagnosticDescription) shouldCapture=\(shouldCapture)"
+                "eventtap.event type=\(type.bokslTabDiagnosticDescription) keyCode=\(keyCode) flags=\(flags.bokslTabDiagnosticDescription) shouldCapture=\(shouldCapture)"
             )
         }
-        guard shouldCapture else { return false }
+        guard type == .keyDown, shouldCapture else { return false }
 
         BokslTabDiagnosticLog.write("eventtap.trigger mode=\(definition.mode.rawValue); suppressing macOS propagation")
         onTrigger?(definition.mode)
@@ -162,6 +168,25 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
     }
 }
 
+
+private extension CGEventType {
+    var bokslTabDiagnosticDescription: String {
+        switch self {
+        case .keyDown:
+            return "keyDown"
+        case .keyUp:
+            return "keyUp"
+        case .flagsChanged:
+            return "flagsChanged"
+        case .tapDisabledByTimeout:
+            return "tapDisabledByTimeout"
+        case .tapDisabledByUserInput:
+            return "tapDisabledByUserInput"
+        default:
+            return "type(\(rawValue))"
+        }
+    }
+}
 
 private extension CGEventFlags {
     var bokslTabDiagnosticDescription: String {

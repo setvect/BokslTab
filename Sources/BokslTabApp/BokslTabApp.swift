@@ -105,7 +105,8 @@ final class SwitcherCoordinator {
     private lazy var panelController = SwitcherPanelController(
         iconProvider: { [weak self] item in self?.icon(for: item.app) },
         onKeyboardAction: { [weak self] action in self?.handle(action: action) },
-        onOpenSettings: { [weak self] in self?.openPermissionSettings() }
+        onOpenSettings: { [weak self] in self?.openPermissionSettings() },
+        diagnosticLog: { BokslTabDiagnosticLog.write($0) }
     )
 
     private var state = SwitcherState(mode: .allAppsAndWindows, items: [])
@@ -231,6 +232,9 @@ final class SwitcherCoordinator {
     }
 
     private func handle(action: SwitcherKeyboardAction) {
+        BokslTabDiagnosticLog.write(
+            "coordinator.keyboardAction action=\(action.diagnosticDescription) panelVisible=\(panelController.isVisible) selectedIndex=\(state.selectedIndex) items=\(state.items.count)"
+        )
         switch action {
         case .next:
             state.moveNext()
@@ -257,10 +261,14 @@ final class SwitcherCoordinator {
 
     private func activateSelectedItem() {
         guard let item = state.selectedItem else {
+            BokslTabDiagnosticLog.write("coordinator.activateSelectedItem skipped reason=no-selected-item items=\(state.items.count) selectedIndex=\(state.selectedIndex)")
             cancelAndRestoreFocus()
             return
         }
 
+        BokslTabDiagnosticLog.write(
+            "coordinator.activateSelectedItem begin itemID=\(item.id) title=\(item.title.diagnosticValue) appPID=\(item.app.processIdentifier)"
+        )
         panelController.hide()
         previousFrontmostApp = nil
         let result: SwitchResult
@@ -271,6 +279,9 @@ final class SwitcherCoordinator {
             result = windowActivator.activate(window: window, app: item.app)
         }
         recordActivatedItem(item, result: result)
+        BokslTabDiagnosticLog.write(
+            "coordinator.activateSelectedItem result=\(result.diagnosticDescription) itemID=\(item.id) title=\(item.title.diagnosticValue)"
+        )
         reportSwitchResult(result)
     }
 
@@ -398,5 +409,49 @@ final class SwitcherCoordinator {
 
     private func icon(for app: AppIdentity) -> NSImage? {
         NSRunningApplication(processIdentifier: app.processIdentifier)?.icon
+    }
+}
+
+private extension SwitcherKeyboardAction {
+    var diagnosticDescription: String {
+        switch self {
+        case .next:
+            return "next"
+        case .previous:
+            return "previous"
+        case .confirm:
+            return "confirm"
+        case .cancel:
+            return "cancel"
+        case .modifierReleased:
+            return "modifierReleased"
+        case .focusLost:
+            return "focusLost"
+        case .select(let index):
+            return "select(\(index))"
+        case .activate(let index):
+            return "activate(\(index))"
+        }
+    }
+}
+
+private extension SwitchResult {
+    var diagnosticDescription: String {
+        switch self {
+        case .exactWindowSuccess:
+            return "exactWindowSuccess"
+        case .limitedAppFallbackSuccess:
+            return "limitedAppFallbackSuccess"
+        case .appActivationSuccess:
+            return "appActivationSuccess"
+        case .safeFailure(let reason):
+            return "safeFailure(\(reason.diagnosticValue))"
+        }
+    }
+}
+
+private extension String {
+    var diagnosticValue: String {
+        replacingOccurrences(of: "\n", with: "\\n")
     }
 }

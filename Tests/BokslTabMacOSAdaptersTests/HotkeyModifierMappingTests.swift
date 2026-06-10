@@ -51,6 +51,21 @@ final class HotkeyModifierMappingTests: XCTestCase {
         XCTAssertEqual(CommandTabEventTapConfiguration.locationDescription, "cghidEventTap")
     }
 
+    func testCommandTabEventTapObservesReleaseDiagnosticsWithoutChangingCaptureContract() {
+        XCTAssertNotEqual(
+            CommandTabEventTapConfiguration.eventsOfInterest & CGEventMask(1 << CGEventType.keyDown.rawValue),
+            0
+        )
+        XCTAssertNotEqual(
+            CommandTabEventTapConfiguration.eventsOfInterest & CGEventMask(1 << CGEventType.keyUp.rawValue),
+            0
+        )
+        XCTAssertNotEqual(
+            CommandTabEventTapConfiguration.eventsOfInterest & CGEventMask(1 << CGEventType.flagsChanged.rawValue),
+            0
+        )
+    }
+
     func testCommandTabEventTapMatcherCapturesOnlyConfiguredCommandTab() {
         XCTAssertTrue(
             CommandTabEventTapMatcher.shouldCapture(

@@ -80,6 +80,13 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         )
     }
 
+    func testModifierReleaseFallbackUsesCurrentModifierState() {
+        XCTAssertNil(SwitcherTriggerModifier.command.modifierReleaseFallbackAction(currentFlags: [.command]))
+        XCTAssertNil(SwitcherTriggerModifier.option.modifierReleaseFallbackAction(currentFlags: [.option]))
+        XCTAssertEqual(SwitcherTriggerModifier.command.modifierReleaseFallbackAction(currentFlags: []), .modifierReleased)
+        XCTAssertEqual(SwitcherTriggerModifier.option.modifierReleaseFallbackAction(currentFlags: []), .modifierReleased)
+    }
+
     func testPanelMetricsUsesScrollOnlyAtThresholdWhenReadable() {
         let largeScreen = CGSize(width: 1600, height: 2000)
 
