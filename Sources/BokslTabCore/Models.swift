@@ -180,22 +180,37 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
         case .app:
             return [id]
         case .window(let window):
+            var projectedIDs = [id]
+            if window.source == .accessibilityEvent,
+               let title = window.title,
+               let stableTitleID = SwitcherItem.stableTitleAliasID(
+                   ownerProcessIdentifier: window.ownerProcessIdentifier,
+                   title: title
+               ) {
+                projectedIDs.append(stableTitleID)
+            }
+
             if let tab = window.tab {
-                return [
-                    id,
+                projectedIDs.append(
                     SwitcherItem.windowID(
                         windowID: tab.parentWindowID,
                         ownerProcessIdentifier: window.ownerProcessIdentifier
-                    ),
-                    SwitcherItem.appID(processIdentifier: app.processIdentifier)
-                ]
+                    )
+                )
             }
-
-            return [
-                id,
-                SwitcherItem.appID(processIdentifier: app.processIdentifier)
-            ]
+            projectedIDs.append(SwitcherItem.appID(processIdentifier: app.processIdentifier))
+            return projectedIDs
         }
+    }
+
+
+    public static func stableTitleAliasID(ownerProcessIdentifier: Int32, title: String) -> String? {
+        guard let stableTitle = StableWindowTitleKey.normalized(title).nonBlank else { return nil }
+        return "stable-title:\(ownerProcessIdentifier):\(stableTitle)"
+    }
+
+    public static func isStableTitleAliasID(_ id: String) -> Bool {
+        id.hasPrefix("stable-title:")
     }
 
     public static func appID(processIdentifier: Int32) -> String {
@@ -233,6 +248,22 @@ public extension Array where Element == SwitcherItem {
         sorted { lhs, rhs in
             lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
+    }
+}
+
+
+public enum StableWindowTitleKey {
+    public static func normalized(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let separators = [" – ", " — ", " - "]
+        for separator in separators {
+            if let range = trimmed.range(of: separator) {
+                return String(trimmed[..<range.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+            }
+        }
+        return trimmed.lowercased()
     }
 }
 

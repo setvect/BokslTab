@@ -76,6 +76,35 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
+
+    func testProviderMapsStableTitleHistoryAfterAccessibilityEventTitleChanges() {
+        let app = AppIdentity(processIdentifier: 10, localizedName: "IntelliJ IDEA")
+        let currentTitle = "BokslTab – Models.swift"
+        let current = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: currentTitle,
+                source: .accessibilityEvent
+            ))
+        )
+        let previousTitleAlias = SwitcherItem.stableTitleAliasID(
+            ownerProcessIdentifier: 10,
+            title: "BokslTab – SwitcherMRUOrdering.swift"
+        )!
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(infoList: []),
+            initialRecentItemIDs: [previousTitleAlias]
+        )
+
+        let context = provider.orderingContext(for: .activeAppWindows, items: [current])
+
+        XCTAssertEqual(context.orderedItemIDs, [current.id])
+        XCTAssertEqual(context.currentItemID, current.id)
+        XCTAssertNil(context.fallbackReason)
+    }
+
     func testProviderFallsBackWhenWindowInfoIsUnavailable() {
         let app = AppIdentity(processIdentifier: 10, localizedName: "App")
         let item = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 300, ownerProcessIdentifier: 10, title: "Current")))

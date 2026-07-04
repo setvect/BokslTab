@@ -547,6 +547,32 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         )
     }
 
+
+    func testAccessibilityEventSyntheticWindowIDUsesStableProjectTitle() {
+        let frame = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let firstFileID = SyntheticWindowID.accessibilityEvent(
+            processIdentifier: 42,
+            title: "BokslTab – Models.swift",
+            frame: frame,
+            index: 0
+        )
+        let secondFileID = SyntheticWindowID.accessibilityEvent(
+            processIdentifier: 42,
+            title: "BokslTab – SwitcherState.swift",
+            frame: frame,
+            index: 0
+        )
+        let otherProjectID = SyntheticWindowID.accessibilityEvent(
+            processIdentifier: 42,
+            title: "BokslDir – README.md",
+            frame: frame,
+            index: 0
+        )
+
+        XCTAssertEqual(firstFileID, secondFileID)
+        XCTAssertNotEqual(firstFileID, otherProjectID)
+    }
+
     func testAccessibilityEventWindowHistoryPolicyDoesNotPreserveSameProjectTitle() {
         let current = AccessibilityEventWindowCacheEntry(
             processIdentifier: 42,

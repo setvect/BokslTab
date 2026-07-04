@@ -151,6 +151,15 @@ struct MRUItemProjectionIndex {
         for item in items {
             exactItemIDs[item.id] = item.id
 
+            for aliasID in item.mruProjectedIDs where SwitcherItem.isStableTitleAliasID(aliasID) {
+                if let existing = unambiguousAliases[aliasID], existing != item.id {
+                    unambiguousAliases.removeValue(forKey: aliasID)
+                    ambiguousAliases.insert(aliasID)
+                } else if !ambiguousAliases.contains(aliasID) {
+                    unambiguousAliases[aliasID] = item.id
+                }
+            }
+
             switch item.kind {
             case .app:
                 unambiguousAliases[item.id] = item.id

@@ -1050,20 +1050,24 @@ struct AccessibilityEventWindowHistoryPolicy {
 
         init(processIdentifier: Int32, title: String) {
             self.processIdentifier = processIdentifier
-            self.title = Self.normalizedProjectTitle(title)
+            self.title = ProjectWindowTitleKey.normalized(title)
         }
+    }
+}
 
-        private static func normalizedProjectTitle(_ title: String) -> String {
-            let trimmed = title.nonBlankCatalogTitle ?? title
-            let separators = [" – ", " — ", " - "]
-            for separator in separators {
-                if let range = trimmed.range(of: separator) {
-                    return String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                        .lowercased()
-                }
+
+private enum ProjectWindowTitleKey {
+    static func normalized(_ title: String) -> String {
+        let trimmed = title.nonBlankCatalogTitle ?? title
+        let separators = [" – ", " — ", " - "]
+        for separator in separators {
+            if let range = trimmed.range(of: separator) {
+                return String(trimmed[..<range.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
             }
-            return trimmed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         }
+        return trimmed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 
@@ -1532,7 +1536,7 @@ enum SyntheticWindowID {
     ) -> UInt32 {
         0x2000_0000 | (hash(
             processIdentifier: processIdentifier,
-            title: title,
+            title: ProjectWindowTitleKey.normalized(title),
             frame: frame,
             index: index
         ) & 0x1fff_ffff)
