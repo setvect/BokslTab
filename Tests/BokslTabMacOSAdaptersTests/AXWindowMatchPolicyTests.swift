@@ -441,31 +441,7 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         XCTAssertTrue(snapshots.isEmpty)
     }
 
-    func testWindowTitleCacheReturnsLastKnownTitleWhenAppHasNoLiveWindow() {
-        let cache = WindowTitleCache()
-        let app = AppIdentity(processIdentifier: 42, localizedName: "Brave Browser")
-        cache.record([
-            WindowSnapshot(
-                identity: WindowIdentity(
-                    windowID: 11723,
-                    ownerProcessIdentifier: 42,
-                    title: "클로드 코워크 세팅 - YouTube - Brave"
-                ),
-                bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440),
-                ownerName: "Brave Browser"
-            )
-        ])
-
-        let snapshots = cache.snapshots(for: [app], excluding: [])
-
-        XCTAssertEqual(snapshots.count, 1)
-        XCTAssertEqual(snapshots[0].identity.ownerProcessIdentifier, 42)
-        XCTAssertEqual(snapshots[0].identity.title, "클로드 코워크 세팅 - YouTube - Brave")
-        XCTAssertGreaterThanOrEqual(snapshots[0].identity.windowID, 0x4000_0000)
-        XCTAssertLessThan(snapshots[0].identity.windowID, 0x8000_0000)
-    }
-
-    func testWindowTitleCacheSkipsShortAuxiliarySurfaces() {
+    func testWindowTitleCacheDoesNotApplyShortAuxiliarySurfaces() {
         let cache = WindowTitleCache()
         cache.record([
             WindowSnapshot(
@@ -478,13 +454,15 @@ final class AXWindowMatchPolicyTests: XCTestCase {
                 ownerName: "Brave Browser"
             )
         ])
-
-        let snapshots = cache.snapshots(
-            for: [AppIdentity(processIdentifier: 42, localizedName: "Brave Browser")],
-            excluding: []
+        let weakLiveWindow = WindowSnapshot(
+            identity: WindowIdentity(windowID: 11723, ownerProcessIdentifier: 42, title: nil),
+            bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+            ownerName: "Brave Browser"
         )
 
-        XCTAssertTrue(snapshots.isEmpty)
+        let snapshots = cache.applyCachedTitles(to: [weakLiveWindow])
+
+        XCTAssertNil(snapshots[0].identity.title)
     }
 
     func testWindowTitleCacheAppliesKnownTitleToLargestWeakLiveWindow() {
@@ -530,13 +508,15 @@ final class AXWindowMatchPolicyTests: XCTestCase {
                 ownerName: "Brave Browser"
             )
         ])
-
-        let snapshots = cache.snapshots(
-            for: [AppIdentity(processIdentifier: 42, localizedName: "Code")],
-            excluding: []
+        let weakLiveWindow = WindowSnapshot(
+            identity: WindowIdentity(windowID: 11723, ownerProcessIdentifier: 42, title: nil),
+            bounds: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+            ownerName: "Code"
         )
 
-        XCTAssertTrue(snapshots.isEmpty)
+        let snapshots = cache.applyCachedTitles(to: [weakLiveWindow])
+
+        XCTAssertNil(snapshots[0].identity.title)
     }
 
     func testWindowTitleCacheEvictsLeastRecentlyUsedEntryWhenBounded() {
@@ -557,24 +537,35 @@ final class AXWindowMatchPolicyTests: XCTestCase {
             snapshot(processIdentifier: 1, title: "One"),
             snapshot(processIdentifier: 2, title: "Two")
         ])
-        _ = cache.snapshots(
-            for: [AppIdentity(processIdentifier: 1, localizedName: "App 1")],
-            excluding: []
-        )
+        _ = cache.applyCachedTitles(to: [
+            WindowSnapshot(
+                identity: WindowIdentity(windowID: 11, ownerProcessIdentifier: 1, title: nil),
+                bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
+                ownerName: "App 1"
+            )
+        ])
 
         cache.record([snapshot(processIdentifier: 3, title: "Three")])
 
-        let snapshots = cache.snapshots(
-            for: [
-                AppIdentity(processIdentifier: 1, localizedName: "App 1"),
-                AppIdentity(processIdentifier: 2, localizedName: "App 2"),
-                AppIdentity(processIdentifier: 3, localizedName: "App 3")
-            ],
-            excluding: []
-        )
+        let snapshots = cache.applyCachedTitles(to: [
+            WindowSnapshot(
+                identity: WindowIdentity(windowID: 11, ownerProcessIdentifier: 1, title: nil),
+                bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
+                ownerName: "App 1"
+            ),
+            WindowSnapshot(
+                identity: WindowIdentity(windowID: 22, ownerProcessIdentifier: 2, title: nil),
+                bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
+                ownerName: "App 2"
+            ),
+            WindowSnapshot(
+                identity: WindowIdentity(windowID: 33, ownerProcessIdentifier: 3, title: nil),
+                bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
+                ownerName: "App 3"
+            )
+        ])
 
-        XCTAssertEqual(snapshots.map(\.identity.ownerProcessIdentifier), [1, 3])
-        XCTAssertEqual(snapshots.map(\.identity.title), ["One", "Three"])
+        XCTAssertEqual(snapshots.map(\.identity.title), ["One", nil, "Three"])
     }
 
 

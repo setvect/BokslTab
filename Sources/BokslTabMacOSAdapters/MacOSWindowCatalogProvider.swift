@@ -92,13 +92,9 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
         )
         let liveSnapshots = tabExpandedSnapshots + axOnlySnapshots + accessibilityEventSnapshots
         titleCache.record(filteredSnapshots + axOnlySnapshots)
-        let cachedSnapshots = cachedTitleSnapshotsForAppsWithoutWindows(
-            apps,
-            includedSnapshots: liveSnapshots
-        )
-        let resultSnapshots = liveSnapshots + cachedSnapshots
+        let resultSnapshots = liveSnapshots
         BokslTabDiagnosticLog.write(
-            "window-catalog.result candidates=\(snapshots.count) enriched=\(enrichedSnapshots.count) cgIncluded=\(filteredSnapshots.count) tabExpanded=\(tabExpandedSnapshots.count) axOnly=\(axOnlySnapshots.count) axEventCached=\(accessibilityEventSnapshots.count) cached=\(cachedSnapshots.count) included=\(resultSnapshots.count)"
+            "window-catalog.result candidates=\(snapshots.count) enriched=\(enrichedSnapshots.count) cgIncluded=\(filteredSnapshots.count) tabExpanded=\(tabExpandedSnapshots.count) axOnly=\(axOnlySnapshots.count) axEventCached=\(accessibilityEventSnapshots.count) cached=0 included=\(resultSnapshots.count)"
         )
         resultSnapshots.forEach { snapshot in
             BokslTabDiagnosticLog.write("window-catalog.include \(snapshot.diagnosticDescription)")
@@ -301,38 +297,6 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding {
             BokslTabDiagnosticLog.write("window-catalog.ax-only.include \(snapshot.diagnosticDescription)")
         }
         return axOnlySnapshots
-    }
-
-    private func cachedTitleSnapshotsForAppsWithoutWindows(
-        _ apps: [AppIdentity],
-        includedSnapshots: [WindowSnapshot]
-    ) -> [WindowSnapshot] {
-        guard !apps.isEmpty else { return [] }
-
-        let representedPIDs = Set(includedSnapshots.map { $0.identity.ownerProcessIdentifier })
-        let missingApps = apps.filter { !representedPIDs.contains($0.processIdentifier) }
-        guard !missingApps.isEmpty else {
-            BokslTabDiagnosticLog.write("window-catalog.cache skipped reason=no-missing-apps apps=\(apps.count)")
-            return []
-        }
-
-        let snapshots = titleCache.snapshots(for: missingApps, excluding: representedPIDs)
-        let includedByPID = Dictionary(grouping: snapshots, by: { $0.identity.ownerProcessIdentifier })
-        BokslTabDiagnosticLog.write(
-            "window-catalog.cache missingApps=\(missingApps.count) included=\(snapshots.count)"
-        )
-        missingApps.forEach { app in
-            let includedCount = includedByPID[app.processIdentifier]?.count ?? 0
-            if includedCount == 0 {
-                BokslTabDiagnosticLog.write(
-                    "window-catalog.cache.miss pid=\(app.processIdentifier) name=\(app.displayName.catalogDiagnosticValue)"
-                )
-            }
-        }
-        snapshots.forEach { snapshot in
-            BokslTabDiagnosticLog.write("window-catalog.cache.include \(snapshot.diagnosticDescription)")
-        }
-        return snapshots
     }
 
     private func accessibilityEventCachedSnapshotsForEligibleApps(
@@ -1367,33 +1331,6 @@ final class WindowTitleCache {
             recordedPIDs.insert(processIdentifier)
             BokslTabDiagnosticLog.write(
                 "window-catalog.cache.record pid=\(processIdentifier) sourceWindow=\(snapshot.identity.windowID) title=\(title.catalogDiagnosticValue) bounds=\(snapshot.bounds.catalogDiagnosticDescription)"
-            )
-        }
-    }
-
-    func snapshots(for apps: [AppIdentity], excluding representedPIDs: Set<Int32>) -> [WindowSnapshot] {
-        apps.enumerated().compactMap { index, app in
-            guard !representedPIDs.contains(app.processIdentifier),
-                  let entry = cachedEntry(
-                      processIdentifier: app.processIdentifier,
-                      appDisplayName: app.displayName
-                  )
-            else { return nil }
-
-            return WindowSnapshot(
-                identity: WindowIdentity(
-                    windowID: SyntheticWindowID.cached(
-                        processIdentifier: entry.ownerProcessIdentifier,
-                        title: entry.title,
-                        frame: entry.bounds,
-                        index: index
-                    ),
-                    ownerProcessIdentifier: entry.ownerProcessIdentifier,
-                    title: entry.title,
-                    source: .cached
-                ),
-                bounds: entry.bounds,
-                ownerName: entry.ownerName ?? app.displayName
             )
         }
     }
