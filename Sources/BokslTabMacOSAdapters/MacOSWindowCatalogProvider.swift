@@ -896,12 +896,19 @@ struct AccessibilityEventWindowSnapshotPolicy {
         guard !eligiblePIDs.isEmpty else { return [] }
         let includedWindowKeys = Set(includedSnapshots.map(WindowKey.init(snapshot:)))
 
-        return entries
+        let candidates = entries
             .filter { eligiblePIDs.contains($0.processIdentifier) }
             .filter { entry in
-                includedSnapshots.contains {
-                    $0.identity.ownerProcessIdentifier == entry.processIdentifier
-                }
+                AccessibilityEventWindowHistoryPolicy.matchesLiveWindowFrame(
+                    entry: entry,
+                    includedSnapshots: includedSnapshots
+                )
+            }
+            .filter { entry in
+                !AccessibilityEventWindowHistoryPolicy.hasSameProjectTitle(
+                    entry: entry,
+                    snapshots: includedSnapshots
+                )
             }
             .filter { entry in
                 guard WindowSnapshot.isReasonableWindowBounds(entry.frame),
@@ -911,6 +918,8 @@ struct AccessibilityEventWindowSnapshotPolicy {
                 let key = WindowKey(entry: entry)
                 return !includedWindowKeys.contains(key)
             }
+
+        return AccessibilityEventWindowHistoryPolicy.latestEntriesByProjectTitle(candidates)
             .sorted { lhs, rhs in
                 if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
                 return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
@@ -953,6 +962,107 @@ struct AccessibilityEventWindowSnapshotPolicy {
             self.y = Int(snapshot.bounds.origin.y.rounded())
             self.width = Int(snapshot.bounds.width.rounded())
             self.height = Int(snapshot.bounds.height.rounded())
+        }
+    }
+}
+
+struct AccessibilityEventWindowHistoryPolicy {
+    static func shouldPreserve(
+        previous: AccessibilityEventWindowCacheEntry,
+        currentEntries: [AccessibilityEventWindowCacheEntry]
+    ) -> Bool {
+        guard !currentEntries.isEmpty else { return false }
+        if currentEntries.contains(where: { hasSameProjectTitle($0, previous) }) {
+            return false
+        }
+        let currentSnapshots = currentEntries.map { entry in
+            WindowSnapshot(
+                identity: WindowIdentity(
+                    windowID: entry.windowID,
+                    ownerProcessIdentifier: entry.processIdentifier,
+                    title: entry.title,
+                    source: .accessibilityEvent
+                ),
+                bounds: entry.frame,
+                ownerName: entry.ownerName
+            )
+        }
+        return matchesLiveWindowFrame(entry: previous, includedSnapshots: currentSnapshots)
+    }
+
+    static func latestEntriesByProjectTitle(
+        _ entries: [AccessibilityEventWindowCacheEntry]
+    ) -> [AccessibilityEventWindowCacheEntry] {
+        var latestByKey: [ProjectTitleKey: AccessibilityEventWindowCacheEntry] = [:]
+        for entry in entries {
+            let key = ProjectTitleKey(entry)
+            guard let existing = latestByKey[key] else {
+                latestByKey[key] = entry
+                continue
+            }
+            if entry.updatedAt > existing.updatedAt {
+                latestByKey[key] = entry
+            }
+        }
+        return Array(latestByKey.values)
+    }
+
+    static func hasSameProjectTitle(
+        entry: AccessibilityEventWindowCacheEntry,
+        snapshots: [WindowSnapshot]
+    ) -> Bool {
+        snapshots.contains { snapshot in
+            guard snapshot.identity.ownerProcessIdentifier == entry.processIdentifier,
+                  let title = snapshot.identity.title
+            else { return false }
+            return ProjectTitleKey(processIdentifier: entry.processIdentifier, title: entry.title)
+                == ProjectTitleKey(processIdentifier: snapshot.identity.ownerProcessIdentifier, title: title)
+        }
+    }
+
+    static func matchesLiveWindowFrame(
+        entry: AccessibilityEventWindowCacheEntry,
+        includedSnapshots: [WindowSnapshot]
+    ) -> Bool {
+        let candidateFrames = includedSnapshots
+            .filter { $0.identity.ownerProcessIdentifier == entry.processIdentifier }
+            .map(\.bounds)
+        return WindowFrameMatchPolicy.bestFrameMatchIndex(
+            targetFrame: entry.frame,
+            candidateFrames: candidateFrames
+        ) != nil
+    }
+
+    private static func hasSameProjectTitle(
+        _ lhs: AccessibilityEventWindowCacheEntry,
+        _ rhs: AccessibilityEventWindowCacheEntry
+    ) -> Bool {
+        ProjectTitleKey(lhs) == ProjectTitleKey(rhs)
+    }
+
+    struct ProjectTitleKey: Hashable {
+        let processIdentifier: Int32
+        let title: String
+
+        init(_ entry: AccessibilityEventWindowCacheEntry) {
+            self.init(processIdentifier: entry.processIdentifier, title: entry.title)
+        }
+
+        init(processIdentifier: Int32, title: String) {
+            self.processIdentifier = processIdentifier
+            self.title = Self.normalizedProjectTitle(title)
+        }
+
+        private static func normalizedProjectTitle(_ title: String) -> String {
+            let trimmed = title.nonBlankCatalogTitle ?? title
+            let separators = [" – ", " — ", " - "]
+            for separator in separators {
+                if let range = trimmed.range(of: separator) {
+                    return String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                }
+            }
+            return trimmed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         }
     }
 }
@@ -1177,7 +1287,15 @@ final class AccessibilityWindowEventCache {
         }
         lock.lock()
         let previousCount = windowsByPID[processIdentifier]?.count ?? 0
-        let prunedEntries = prune(nextEntries)
+        let currentEntries = nextEntries.values.map(\.entry)
+        let preservedEntries = (windowsByPID[processIdentifier] ?? [:]).filter { windowID, storedWindow in
+            guard nextEntries[windowID] == nil else { return false }
+            return AccessibilityEventWindowHistoryPolicy.shouldPreserve(
+                previous: storedWindow.entry,
+                currentEntries: currentEntries
+            )
+        }
+        let prunedEntries = prune(preservedEntries.merging(nextEntries) { _, current in current })
         if prunedEntries.isEmpty {
             windowsByPID.removeValue(forKey: processIdentifier)
         } else {
@@ -1185,7 +1303,7 @@ final class AccessibilityWindowEventCache {
         }
         lock.unlock()
         BokslTabDiagnosticLog.write(
-            "window-catalog.ax-event-cache.replace pid=\(processIdentifier) previous=\(previousCount) current=\(prunedEntries.count) source=\(source)"
+            "window-catalog.ax-event-cache.replace pid=\(processIdentifier) previous=\(previousCount) current=\(prunedEntries.count) preserved=\(preservedEntries.count) source=\(source)"
         )
     }
 
