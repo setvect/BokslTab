@@ -128,17 +128,23 @@ enum SwitcherPanelLayout {
     static let minimumFontSize: CGFloat = 11
     static let screenEdgeMargin: CGFloat = 12
     static let widthScale: CGFloat = 2.0 / 3.0
+    static let minimumResolutionScale: CGFloat = 0.74
+    static let maximumResolutionScale: CGFloat = 1.0
+    static let scaleReferenceHeight: CGFloat = 1440
     static let defaultAvailableSize = CGSize(width: 1280, height: 800)
 
     static func metrics(itemCount: Int, availableSize: CGSize) -> SwitcherPanelMetrics {
         let safeCount = max(itemCount, 1)
-        let fullSizePanelWidth = min(max(560, availableSize.width * 0.90), 1320)
+        let resolutionScale = resolutionScale(for: availableSize)
+        let scaledBaseRowHeight = floor(baseRowHeight * resolutionScale)
+        let scaledMinimumRowHeight = minimumRowHeight
+        let fullSizePanelWidth = min(max(560 * resolutionScale, availableSize.width * 0.90), 1320 * resolutionScale)
         let desiredPanelWidth = fullSizePanelWidth * widthScale
         let maxPanelWidth = max(1, availableSize.width - screenEdgeMargin * 2)
         let panelWidth = min(desiredPanelWidth, maxPanelWidth)
         let maxPanelHeight = max(1, availableSize.height - screenEdgeMargin * 2)
         let maxListHeight = max(1, maxPanelHeight - panelPadding * 2)
-        let minimumUsableRowHeight = min(minimumRowHeight, maxListHeight)
+        let minimumUsableRowHeight = min(scaledMinimumRowHeight, maxListHeight)
         let noScrollCandidateRowHeight = floor(maxListHeight / CGFloat(safeCount))
         let guardrailRequiresScroll = itemCount > 0 && itemCount < scrollThreshold && noScrollCandidateRowHeight < minimumUsableRowHeight
         let usesScroll = itemCount >= scrollThreshold || guardrailRequiresScroll
@@ -146,16 +152,16 @@ enum SwitcherPanelLayout {
         let visibleRows: Int
 
         if usesScroll {
-            rowHeight = min(baseRowHeight, max(minimumUsableRowHeight, floor(maxListHeight / CGFloat(min(safeCount, scrollThreshold - 1)))))
+            rowHeight = min(scaledBaseRowHeight, max(minimumUsableRowHeight, floor(maxListHeight / CGFloat(min(safeCount, scrollThreshold - 1)))))
             visibleRows = max(1, min(safeCount, Int(floor(maxListHeight / rowHeight))))
         } else {
-            rowHeight = min(baseRowHeight, max(minimumUsableRowHeight, noScrollCandidateRowHeight))
+            rowHeight = min(scaledBaseRowHeight, max(minimumUsableRowHeight, noScrollCandidateRowHeight))
             visibleRows = safeCount
         }
 
         let scale = rowHeight / baseRowHeight
-        let iconSize = max(minimumIconSize, floor(baseIconSize * scale))
-        let fontSize = max(minimumFontSize, floor(baseFontSize * scale))
+        let iconSize = max(minimumIconSize, (baseIconSize * scale).rounded())
+        let fontSize = max(minimumFontSize, (baseFontSize * scale).rounded())
         let listHeight = CGFloat(visibleRows) * rowHeight + CGFloat(max(visibleRows - 1, 0)) * rowSpacing
 
         return SwitcherPanelMetrics(
@@ -167,6 +173,12 @@ enum SwitcherPanelLayout {
             fontSize: fontSize,
             listHeight: listHeight
         )
+    }
+
+
+    static func resolutionScale(for availableSize: CGSize) -> CGFloat {
+        let rawScale = availableSize.height / scaleReferenceHeight
+        return clamped(rawScale, lower: minimumResolutionScale, upper: maximumResolutionScale)
     }
 
     static func panelFrame(

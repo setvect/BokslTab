@@ -123,12 +123,28 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         XCTAssertLessThanOrEqual(metrics.panelWidth, smallScreen.width - SwitcherPanelLayout.screenEdgeMargin * 2)
     }
 
-    func testPanelMetricsScaleWidthToTwoThirdsOfPreviousFullWidth() {
-        let screen = CGSize(width: 1280, height: 800)
-        let previousFullWidth = min(max(CGFloat(560), screen.width * 0.90), CGFloat(1320))
-        let metrics = SwitcherPanelLayout.metrics(itemCount: 7, availableSize: screen)
+    func testPanelMetricsScaleWithScreenHeight() {
+        let fullHD = CGSize(width: 1920, height: 1080)
+        let qhd = CGSize(width: 2560, height: 1440)
+        let fullHDMetrics = SwitcherPanelLayout.metrics(itemCount: 7, availableSize: fullHD)
+        let qhdMetrics = SwitcherPanelLayout.metrics(itemCount: 7, availableSize: qhd)
 
-        XCTAssertEqual(metrics.panelWidth, previousFullWidth * SwitcherPanelLayout.widthScale, accuracy: 0.1)
+        XCTAssertEqual(SwitcherPanelLayout.resolutionScale(for: fullHD), 0.75, accuracy: 0.01)
+        XCTAssertEqual(SwitcherPanelLayout.resolutionScale(for: qhd), 1.0, accuracy: 0.01)
+        XCTAssertLessThan(fullHDMetrics.panelWidth, qhdMetrics.panelWidth)
+        XCTAssertLessThan(fullHDMetrics.rowHeight, qhdMetrics.rowHeight)
+        XCTAssertLessThan(fullHDMetrics.iconSize, qhdMetrics.iconSize)
+        XCTAssertLessThan(fullHDMetrics.fontSize, qhdMetrics.fontSize)
+    }
+
+    func testPanelMetricsUseMinimumResolutionScaleForShortScreens() {
+        let shortScreen = CGSize(width: 1280, height: 800)
+
+        XCTAssertEqual(
+            SwitcherPanelLayout.resolutionScale(for: shortScreen),
+            SwitcherPanelLayout.minimumResolutionScale,
+            accuracy: 0.01
+        )
     }
 
     func testPanelMetricsClampWidthToAvailableScreen() {
