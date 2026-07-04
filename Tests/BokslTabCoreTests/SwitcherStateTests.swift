@@ -43,16 +43,43 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertEqual(item.subtitle, "FallbackApp")
     }
 
-    func testAllAppsAndWindowsComposesWindowsAndAppFallbacks() {
+    func testAllAppsAndWindowsComposesOnlyWindowBackedItems() {
         let code = AppIdentity(processIdentifier: 1, localizedName: "Code")
         let notes = AppIdentity(processIdentifier: 2, localizedName: "Notes")
         let windows = [WindowIdentity(windowID: 100, ownerProcessIdentifier: 1, title: "Project")]
 
         let items = SwitcherItemComposer.composeAllAppsAndWindows(apps: [code, notes], windows: windows)
 
-        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items.count, 1)
         XCTAssertTrue(items.contains { $0.title == "Project" && $0.isWindow })
-        XCTAssertTrue(items.contains { $0.title == "Notes" && !$0.isWindow })
+        XCTAssertFalse(items.contains { $0.title == "Notes" })
+    }
+
+    func testAllAppsAndWindowsKeepsFinderWhenItHasAWindow() {
+        let finder = AppIdentity(
+            processIdentifier: 1,
+            bundleIdentifier: "com.apple.finder",
+            localizedName: "Finder"
+        )
+        let windows = [WindowIdentity(windowID: 100, ownerProcessIdentifier: 1, title: "Downloads")]
+
+        let items = SwitcherItemComposer.composeAllAppsAndWindows(apps: [finder], windows: windows)
+
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.title, "Downloads")
+        XCTAssertTrue(items.first?.isWindow ?? false)
+    }
+
+    func testAllAppsAndWindowsSkipsFinderWhenItHasNoWindow() {
+        let finder = AppIdentity(
+            processIdentifier: 1,
+            bundleIdentifier: "com.apple.finder",
+            localizedName: "Finder"
+        )
+
+        let items = SwitcherItemComposer.composeAllAppsAndWindows(apps: [finder], windows: [])
+
+        XCTAssertTrue(items.isEmpty)
     }
 
     func testActiveAppWindowsShowsSingleAppRowWhenNoWindows() {

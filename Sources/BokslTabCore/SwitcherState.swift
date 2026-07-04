@@ -68,10 +68,6 @@ public enum SwitcherItemComposer {
             items.append(SwitcherItem(app: app, kind: .window(window)))
         }
 
-        for app in visibleApps where !appPIDsWithWindow.contains(app.processIdentifier) {
-            items.append(SwitcherItem(app: app, kind: .app))
-        }
-
         return items.sortedForSwitcher()
     }
 
