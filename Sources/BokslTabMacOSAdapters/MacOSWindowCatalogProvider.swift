@@ -935,6 +935,11 @@ struct AccessibilityEventWindowSnapshotPolicy {
         return entries
             .filter { eligiblePIDs.contains($0.processIdentifier) }
             .filter { entry in
+                includedSnapshots.contains {
+                    $0.identity.ownerProcessIdentifier == entry.processIdentifier
+                }
+            }
+            .filter { entry in
                 guard WindowSnapshot.isReasonableWindowBounds(entry.frame),
                       !TabExpandedWindowCatalogPolicy.isPlaceholderTitle(entry.title)
                 else { return false }
@@ -1037,7 +1042,7 @@ final class AccessibilityWindowEventCache {
         for processIdentifier in processIdentifiers.sorted() {
             let appElement = AXUIElementCreateApplication(processIdentifier)
             let windows = currentWindows(from: appElement, processIdentifier: processIdentifier)
-            record(windows: windows, processIdentifier: processIdentifier, source: "seed")
+            replace(windows: windows, processIdentifier: processIdentifier, source: "seed")
             BokslTabDiagnosticLog.write(
                 "window-catalog.ax-event-cache.seed pid=\(processIdentifier) windows=\(windows.count)"
             )
@@ -1149,7 +1154,7 @@ final class AccessibilityWindowEventCache {
             processIdentifier: pid
         ))
         let uniqueWindows = deduplicatedElements(windows)
-        record(windows: uniqueWindows, processIdentifier: pid, source: notification)
+        replace(windows: uniqueWindows, processIdentifier: pid, source: notification)
         BokslTabDiagnosticLog.write(
             "window-catalog.ax-event-cache.event notification=\(notification) pid=\(pid) windows=\(uniqueWindows.count)"
         )
@@ -1187,12 +1192,13 @@ final class AccessibilityWindowEventCache {
         return uniqueWindows
     }
 
-    private func record(
+    private func replace(
         windows: [AXUIElement],
         processIdentifier: Int32,
         source: String
     ) {
         let now = Date()
+        var nextEntries: [UInt32: StoredWindow] = [:]
         for window in windows {
             guard let entry = cacheEntry(
                 for: window,
@@ -1200,15 +1206,23 @@ final class AccessibilityWindowEventCache {
                 source: source,
                 updatedAt: now
             ) else { continue }
-            lock.lock()
-            var entries = windowsByPID[processIdentifier] ?? [:]
-            entries[entry.windowID] = StoredWindow(entry: entry, element: window)
-            windowsByPID[processIdentifier] = prune(entries)
-            lock.unlock()
+            nextEntries[entry.windowID] = StoredWindow(entry: entry, element: window)
             BokslTabDiagnosticLog.write(
                 "window-catalog.ax-event-cache.record pid=\(processIdentifier) window=\(entry.windowID) source=\(source) title=\(entry.title.catalogDiagnosticValue) frame=\(entry.frame.catalogDiagnosticDescription)"
             )
         }
+        lock.lock()
+        let previousCount = windowsByPID[processIdentifier]?.count ?? 0
+        let prunedEntries = prune(nextEntries)
+        if prunedEntries.isEmpty {
+            windowsByPID.removeValue(forKey: processIdentifier)
+        } else {
+            windowsByPID[processIdentifier] = prunedEntries
+        }
+        lock.unlock()
+        BokslTabDiagnosticLog.write(
+            "window-catalog.ax-event-cache.replace pid=\(processIdentifier) previous=\(previousCount) current=\(prunedEntries.count) source=\(source)"
+        )
     }
 
     private func cacheEntry(
@@ -1285,6 +1299,10 @@ final class AccessibilityWindowEventCache {
     private func removeObserver(processIdentifier: Int32, reason: String) {
         guard let registration = observersByPID.removeValue(forKey: processIdentifier) else { return }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), registration.source, .commonModes)
+        lock.lock()
+        windowsByPID.removeValue(forKey: processIdentifier)
+        ownerNameByPID.removeValue(forKey: processIdentifier)
+        lock.unlock()
         BokslTabDiagnosticLog.write(
             "window-catalog.ax-event-cache.observer removed pid=\(processIdentifier) reason=\(reason)"
         )

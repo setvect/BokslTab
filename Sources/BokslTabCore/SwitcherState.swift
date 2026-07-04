@@ -59,12 +59,10 @@ public enum SwitcherItemComposer {
             return true
         }
         let appsByPID = Dictionary(uniqueKeysWithValues: visibleApps.map { ($0.processIdentifier, $0) })
-        var appPIDsWithWindow = Set<Int32>()
         var items: [SwitcherItem] = []
 
         for window in windows {
             guard let app = appsByPID[window.ownerProcessIdentifier] else { continue }
-            appPIDsWithWindow.insert(app.processIdentifier)
             items.append(SwitcherItem(app: app, kind: .window(window)))
         }
 

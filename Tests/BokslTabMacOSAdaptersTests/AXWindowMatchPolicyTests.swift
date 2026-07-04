@@ -385,6 +385,33 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         XCTAssertLessThan(snapshots[0].identity.windowID, 0x4000_0000)
     }
 
+    func testAccessibilityEventCachePolicyRequiresLiveWindowForSameApp() {
+        let entries = [
+            AccessibilityEventWindowCacheEntry(
+                processIdentifier: 42,
+                windowID: SyntheticWindowID.accessibilityEvent(
+                    processIdentifier: 42,
+                    title: "Finder Folder",
+                    frame: CGRect(x: 100, y: 100, width: 900, height: 700),
+                    index: 0
+                ),
+                title: "Finder Folder",
+                frame: CGRect(x: 100, y: 100, width: 900, height: 700),
+                ownerName: "Finder",
+                source: "seed",
+                updatedAt: Date(timeIntervalSince1970: 10)
+            )
+        ]
+
+        let snapshots = AccessibilityEventWindowSnapshotPolicy.snapshots(
+            from: entries,
+            eligiblePIDs: [42],
+            excluding: []
+        )
+
+        XCTAssertTrue(snapshots.isEmpty)
+    }
+
     func testAccessibilityEventCachePolicySkipsUnsupportedPIDAndPlaceholderTitles() {
         let entries = [
             AccessibilityEventWindowCacheEntry(
