@@ -125,8 +125,8 @@ public final class SwitcherPanelController {
     }
 
     private func configurePanelsForCurrentScreens() {
-        let screens = NSScreen.screens.isEmpty ? [NSScreen.main].compactMap { $0 } : NSScreen.screens
-        guard !screens.isEmpty else { return }
+        guard let screen = NSScreen.screens.first ?? NSScreen.main else { return }
+        let screens = [screen]
 
         let wasHidingProgrammatically = isHidingProgrammatically
         isHidingProgrammatically = true
