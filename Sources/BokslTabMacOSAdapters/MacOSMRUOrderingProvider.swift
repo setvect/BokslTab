@@ -148,34 +148,34 @@ struct MRUItemProjectionIndex {
         var unambiguousAliases: [String: String] = [:]
         var ambiguousAliases = Set<String>()
 
+        func registerAlias(_ aliasID: String, for itemID: String) {
+            if let existing = unambiguousAliases[aliasID], existing != itemID {
+                unambiguousAliases.removeValue(forKey: aliasID)
+                ambiguousAliases.insert(aliasID)
+            } else if !ambiguousAliases.contains(aliasID) {
+                unambiguousAliases[aliasID] = itemID
+            }
+        }
+
         for item in items {
             exactItemIDs[item.id] = item.id
 
-            for aliasID in item.mruProjectedIDs where SwitcherItem.isStableTitleAliasID(aliasID) {
-                if let existing = unambiguousAliases[aliasID], existing != item.id {
-                    unambiguousAliases.removeValue(forKey: aliasID)
-                    ambiguousAliases.insert(aliasID)
-                } else if !ambiguousAliases.contains(aliasID) {
-                    unambiguousAliases[aliasID] = item.id
-                }
-            }
+            item.mruProjectedIDs
+                .filter(SwitcherItem.isStableTitleAliasID)
+                .forEach { registerAlias($0, for: item.id) }
 
-            switch item.kind {
-            case .app:
-                unambiguousAliases[item.id] = item.id
-            case .window(let window):
-                guard let tab = window.tab, tab.isSelected else { continue }
-                let parentWindowID = SwitcherItem.windowID(
+            guard case .window(let window) = item.kind,
+                  let tab = window.tab,
+                  tab.isSelected
+            else { continue }
+
+            registerAlias(
+                SwitcherItem.windowID(
                     windowID: tab.parentWindowID,
                     ownerProcessIdentifier: window.ownerProcessIdentifier
-                )
-                if let existing = unambiguousAliases[parentWindowID], existing != item.id {
-                    unambiguousAliases.removeValue(forKey: parentWindowID)
-                    ambiguousAliases.insert(parentWindowID)
-                } else if !ambiguousAliases.contains(parentWindowID) {
-                    unambiguousAliases[parentWindowID] = item.id
-                }
-            }
+                ),
+                for: item.id
+            )
         }
 
         ambiguousAliases.forEach { unambiguousAliases.removeValue(forKey: $0) }
