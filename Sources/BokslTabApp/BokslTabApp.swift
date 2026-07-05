@@ -9,7 +9,7 @@ struct BokslTabApplication: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("BokslTab", systemImage: "rectangle.stack") {
+        MenuBarExtra {
             Button("모든 앱/창 보기") {
                 appDelegate.coordinator?.show(mode: .allAppsAndWindows)
             }
@@ -22,12 +22,49 @@ struct BokslTabApplication: App {
 
             Divider()
 
-            Button("종료") {
+            Button("BokslTab 종료") {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q")
+        } label: {
+            Image(nsImage: BokslTabMenuBarIcon.image)
         }
     }
+}
+
+private enum BokslTabMenuBarIcon {
+    static let image: NSImage = {
+        let image = NSImage(size: NSSize(width: 22, height: 22))
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        NSColor.white.setStroke()
+
+        let outline = NSBezierPath(roundedRect: NSRect(x: 3.5, y: 5.0, width: 15.0, height: 12.0), xRadius: 3.0, yRadius: 3.0)
+        outline.lineWidth = 1.8
+        outline.stroke()
+
+        let arrow = NSBezierPath()
+        arrow.lineWidth = 1.9
+        arrow.lineCapStyle = .round
+        arrow.lineJoinStyle = .round
+        arrow.move(to: NSPoint(x: 7.1, y: 11.0))
+        arrow.line(to: NSPoint(x: 13.4, y: 11.0))
+        arrow.move(to: NSPoint(x: 11.3, y: 8.8))
+        arrow.line(to: NSPoint(x: 13.7, y: 11.0))
+        arrow.line(to: NSPoint(x: 11.3, y: 13.2))
+        arrow.stroke()
+
+        let tabStop = NSBezierPath()
+        tabStop.lineWidth = 1.9
+        tabStop.lineCapStyle = .round
+        tabStop.move(to: NSPoint(x: 15.6, y: 8.3))
+        tabStop.line(to: NSPoint(x: 15.6, y: 13.7))
+        tabStop.stroke()
+
+        image.isTemplate = true
+        return image
+    }()
 }
 
 @MainActor
