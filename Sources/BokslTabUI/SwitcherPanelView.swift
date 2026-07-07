@@ -274,7 +274,45 @@ private struct SwitcherRowView: View {
                 .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
         )
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .onTapGesture(count: 2, perform: onActivate)
+        .overlay(
+            RowClickHandlingOverlay(
+                onSelect: onSelect,
+                onActivate: onActivate
+            )
+        )
+    }
+}
+
+private struct RowClickHandlingOverlay: NSViewRepresentable {
+    let onSelect: () -> Void
+    let onActivate: () -> Void
+
+    func makeNSView(context: Context) -> RowClickHandlingView {
+        let view = RowClickHandlingView()
+        view.onSelect = onSelect
+        view.onActivate = onActivate
+        return view
+    }
+
+    func updateNSView(_ nsView: RowClickHandlingView, context: Context) {
+        nsView.onSelect = onSelect
+        nsView.onActivate = onActivate
+    }
+}
+
+private final class RowClickHandlingView: NSView {
+    var onSelect: (() -> Void)?
+    var onActivate: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 {
+            onActivate?()
+        } else {
+            onSelect?()
+        }
     }
 }
