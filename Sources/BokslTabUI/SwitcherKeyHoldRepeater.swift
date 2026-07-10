@@ -1,8 +1,8 @@
 import Foundation
 
 enum SwitcherKeyRepeatTiming {
-    static let initialDelay: TimeInterval = 0.2
-    static let repeatInterval: TimeInterval = 0.1
+    static let initialDelay: TimeInterval = 0.23
+    static let repeatInterval: TimeInterval = 0.07
 }
 
 @MainActor
