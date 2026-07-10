@@ -87,6 +87,74 @@ final class SwitcherKeyboardMapperTests: XCTestCase {
         XCTAssertEqual(SwitcherTriggerModifier.option.modifierReleaseFallbackAction(currentFlags: []), .modifierReleased)
     }
 
+    func testAppDefinedKeyRepeatTimingUsesTwoHundredThenOneHundredMilliseconds() {
+        XCTAssertEqual(SwitcherKeyRepeatTiming.initialDelay, 0.2)
+        XCTAssertEqual(SwitcherKeyRepeatTiming.repeatInterval, 0.1)
+    }
+
+    func testNavigationHoldActionsIncludeTriggerModifierShiftWithoutTab() {
+        XCTAssertEqual(
+            SwitcherTriggerModifier.command.navigationHoldAction(
+                currentFlags: [.command],
+                isTabKeyPressed: true
+            ),
+            .next
+        )
+        XCTAssertEqual(
+            SwitcherTriggerModifier.command.navigationHoldAction(
+                currentFlags: [.command, .shift],
+                isTabKeyPressed: true
+            ),
+            .previous
+        )
+        XCTAssertEqual(
+            SwitcherTriggerModifier.command.navigationHoldAction(
+                currentFlags: [.command, .shift],
+                isTabKeyPressed: false
+            ),
+            .previous
+        )
+        XCTAssertNil(
+            SwitcherTriggerModifier.command.navigationHoldAction(
+                currentFlags: [.command],
+                isTabKeyPressed: false
+            )
+        )
+        XCTAssertEqual(
+            SwitcherTriggerModifier.option.navigationHoldAction(
+                currentFlags: [.option, .shift],
+                isTabKeyPressed: false
+            ),
+            .previous
+        )
+    }
+
+    func testKeyHoldRepeaterStopsAfterHeldStateClears() async {
+        let repeatedTwice = expectation(description: "held key repeats twice")
+        repeatedTwice.expectedFulfillmentCount = 2
+
+        let repeater = await MainActor.run {
+            var isHeld = true
+            var repeatCount = 0
+            return SwitcherKeyHoldRepeater(
+                initialDelay: 0.01,
+                repeatInterval: 0.01,
+                isHeld: { isHeld },
+                onRepeat: {
+                    repeatCount += 1
+                    repeatedTwice.fulfill()
+                    if repeatCount == 2 {
+                        isHeld = false
+                    }
+                }
+            )
+        }
+
+        await MainActor.run { repeater.restart() }
+        await fulfillment(of: [repeatedTwice], timeout: 1)
+        await MainActor.run { repeater.stop() }
+    }
+
     func testPanelMetricsUsesScrollOnlyAtThresholdWhenReadable() {
         let largeScreen = CGSize(width: 1600, height: 2000)
 

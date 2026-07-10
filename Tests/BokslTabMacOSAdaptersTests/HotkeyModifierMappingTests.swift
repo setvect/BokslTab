@@ -89,6 +89,34 @@ final class HotkeyModifierMappingTests: XCTestCase {
         )
     }
 
+    func testCommandTabEventTapSuppressesSystemAutoRepeatWithoutNotifyingTrigger() {
+        let definition = SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
+
+        XCTAssertTrue(
+            CommandTabEventTapMatcher.shouldNotifyTrigger(
+                keyCode: 48,
+                flags: [.maskCommand],
+                definition: definition,
+                isAutoRepeat: false
+            )
+        )
+        XCTAssertFalse(
+            CommandTabEventTapMatcher.shouldNotifyTrigger(
+                keyCode: 48,
+                flags: [.maskCommand],
+                definition: definition,
+                isAutoRepeat: true
+            )
+        )
+        XCTAssertTrue(
+            CommandTabEventTapMatcher.shouldCapture(
+                keyCode: 48,
+                flags: [.maskCommand],
+                definition: definition
+            )
+        )
+    }
+
     func testPrioritizedHotkeyPlanRemovesCommandTabFromCarbonWhenEventTapIsAvailable() {
         let definitions = [
             SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition,

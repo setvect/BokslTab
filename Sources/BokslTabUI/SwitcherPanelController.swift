@@ -1,5 +1,6 @@
 import AppKit
 import BokslTabCore
+import CoreGraphics
 import SwiftUI
 
 @MainActor
@@ -9,12 +10,20 @@ public final class SwitcherPanelController {
     private let onOpenSettings: () -> Void
     private let diagnosticLog: (String) -> Void
     private let currentModifierFlags: () -> NSEvent.ModifierFlags
+    private let isTabKeyPressed: () -> Bool
     private var panels: [SwitcherPanelWindow] = []
     private var panelScreens: [NSScreen] = []
     private var keyEventMonitor: Any?
     private var appDidResignActiveObserver: NSObjectProtocol?
     private var modifierReleaseFallbackTimer: Timer?
+    private lazy var navigationHoldRepeater = SwitcherKeyHoldRepeater(
+        initialDelay: SwitcherKeyRepeatTiming.initialDelay,
+        repeatInterval: SwitcherKeyRepeatTiming.repeatInterval,
+        isHeld: { [weak self] in self?.navigationHoldAction != nil },
+        onRepeat: { [weak self] in self?.moveForCurrentNavigationHold() }
+    )
     private var isHidingProgrammatically = false
+    private var expectsModifierRelease = false
     private var triggerModifier: SwitcherTriggerModifier = .option
 
     public init(
@@ -22,13 +31,17 @@ public final class SwitcherPanelController {
         onKeyboardAction: @escaping (SwitcherKeyboardAction) -> Void,
         onOpenSettings: @escaping () -> Void,
         diagnosticLog: @escaping (String) -> Void = { _ in },
-        currentModifierFlags: @escaping () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags }
+        currentModifierFlags: @escaping () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags },
+        isTabKeyPressed: @escaping () -> Bool = {
+            CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(48))
+        }
     ) {
         self.iconProvider = iconProvider
         self.onAction = onKeyboardAction
         self.onOpenSettings = onOpenSettings
         self.diagnosticLog = diagnosticLog
         self.currentModifierFlags = currentModifierFlags
+        self.isTabKeyPressed = isTabKeyPressed
     }
 
     deinit {
@@ -98,10 +111,13 @@ public final class SwitcherPanelController {
     }
 
     public func setExpectsModifierRelease(_ expectsModifierRelease: Bool) {
+        self.expectsModifierRelease = expectsModifierRelease
         if expectsModifierRelease {
             startModifierReleaseFallbackIfNeeded()
+            restartNavigationHoldRepeat()
         } else {
             stopModifierReleaseFallback()
+            stopNavigationHoldRepeat()
         }
     }
 
@@ -111,7 +127,9 @@ public final class SwitcherPanelController {
             panel.orderOut(nil)
         }
         isHidingProgrammatically = false
+        expectsModifierRelease = false
         stopModifierReleaseFallback()
+        stopNavigationHoldRepeat()
         removeKeyEventMonitor()
         removeAppDidResignActiveObserver()
     }
@@ -221,9 +239,39 @@ public final class SwitcherPanelController {
     private func handleMonitoredEvent(_ event: NSEvent) -> NSEvent? {
         guard let primaryPanel, primaryPanel.isVisible else { return event }
         guard event.window == primaryPanel || NSApp.keyWindow == primaryPanel else { return event }
+        if expectsModifierRelease, event.type == .keyDown, event.keyCode == 48 {
+            if event.isARepeat { return nil }
+            restartNavigationHoldRepeat()
+        } else if expectsModifierRelease,
+                  event.type == .flagsChanged,
+                  triggerModifier.isStillPressed(in: event.modifierFlags),
+                  event.isShiftPressEvent {
+            restartNavigationHoldRepeat()
+        }
         guard let action = SwitcherKeyboardMapper.action(for: event, triggerModifier: triggerModifier) else { return event }
         onAction(action)
         return nil
+    }
+
+    private func restartNavigationHoldRepeat() {
+        navigationHoldRepeater.restart()
+    }
+
+    private func stopNavigationHoldRepeat() {
+        navigationHoldRepeater.stop()
+    }
+
+    private var navigationHoldAction: SwitcherKeyboardAction? {
+        guard isVisible else { return nil }
+        return triggerModifier.navigationHoldAction(
+            currentFlags: currentModifierFlags(),
+            isTabKeyPressed: isTabKeyPressed()
+        )
+    }
+
+    private func moveForCurrentNavigationHold() {
+        guard let action = navigationHoldAction else { return }
+        onAction(action)
     }
 
     private func restoreFramesAfterContentUpdate(_ framesBeforeUpdate: [NSRect]) {
@@ -317,6 +365,15 @@ enum SwitcherTriggerModifier: Equatable, Sendable {
 
     func modifierReleaseFallbackAction(currentFlags: NSEvent.ModifierFlags) -> SwitcherKeyboardAction? {
         isStillPressed(in: currentFlags) ? nil : .modifierReleased
+    }
+
+    func navigationHoldAction(
+        currentFlags: NSEvent.ModifierFlags,
+        isTabKeyPressed: Bool
+    ) -> SwitcherKeyboardAction? {
+        guard isStillPressed(in: currentFlags) else { return nil }
+        if currentFlags.contains(.shift) { return .previous }
+        return isTabKeyPressed ? .next : nil
     }
 }
 

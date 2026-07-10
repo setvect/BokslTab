@@ -17,6 +17,15 @@ enum CommandTabEventTapMatcher {
             && !flags.contains(.maskAlternate)
             && !flags.contains(.maskControl)
     }
+
+    static func shouldNotifyTrigger(
+        keyCode: Int64,
+        flags: CGEventFlags,
+        definition: HotkeyDefinition,
+        isAutoRepeat: Bool
+    ) -> Bool {
+        !isAutoRepeat && shouldCapture(keyCode: keyCode, flags: flags, definition: definition)
+    }
 }
 
 private enum CommandTabEventTapStatus {
@@ -135,21 +144,30 @@ public final class CommandTabEventTapHotkeyService: CommandTabEventTapHotkeyServ
         guard type == .keyDown, let definition else { return false }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = event.flags
+        let isAutoRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         let isDiagnosticCandidate = keyCode == CommandTabEventTapMatcher.tabKeyCode
         let shouldCapture = CommandTabEventTapMatcher.shouldCapture(
             keyCode: keyCode,
             flags: flags,
             definition: definition
         )
+        let shouldNotifyTrigger = CommandTabEventTapMatcher.shouldNotifyTrigger(
+            keyCode: keyCode,
+            flags: flags,
+            definition: definition,
+            isAutoRepeat: isAutoRepeat
+        )
         if isDiagnosticCandidate {
             BokslTabDiagnosticLog.write(
-                "eventtap.keyDown keyCode=\(keyCode) flags=\(flags.bokslTabDiagnosticDescription) shouldCapture=\(shouldCapture)"
+                "eventtap.keyDown keyCode=\(keyCode) flags=\(flags.bokslTabDiagnosticDescription) autoRepeat=\(isAutoRepeat) shouldCapture=\(shouldCapture)"
             )
         }
         guard shouldCapture else { return false }
 
-        BokslTabDiagnosticLog.write("eventtap.trigger mode=\(definition.mode.rawValue); suppressing macOS propagation")
-        onTrigger?(definition.mode)
+        if shouldNotifyTrigger {
+            BokslTabDiagnosticLog.write("eventtap.trigger mode=\(definition.mode.rawValue); suppressing macOS propagation")
+            onTrigger?(definition.mode)
+        }
         return true
     }
 

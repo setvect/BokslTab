@@ -41,8 +41,8 @@ open .build/dev-app/BokslTab.app
 | --- | --- |
 | 모든 앱/창 전환 | `Command + Tab` |
 | 활성 앱 창 전환 | `Option + Tab` |
-| 다음 항목 | `Tab`, `↓`, `→` |
-| 이전 항목 | `Shift + Tab`, `↑`, `←` |
+| 다음 항목 | `Tab`, `↓`, `→` (`Tab`을 길게 누르면 연속 이동) |
+| 이전 항목 | `Shift + Tab`, `↑`, `←` (목록이 열린 상태에서 `Command + Shift` 또는 `Option + Shift`를 길게 누르면 연속 이동) |
 | 선택 항목으로 전환 | `Enter`, `Space` |
 | 취소 | `Esc` |
 
