@@ -788,6 +788,34 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         XCTAssertEqual(framed.snapshots[0].identity.tab?.parentFrame, WindowFrameIdentity(x: 10, y: 20, width: 900, height: 700))
     }
 
+    func testNativeWindowTabGroupPolicyUsesDirectAXTabButtonsOnly() {
+        struct Node {
+            let role: String
+            let subrole: String?
+            let children: [String]
+        }
+        let nodes = [
+            "root": Node(role: "AXGroup", subrole: nil, children: ["nested-tab-group"]),
+            "nested-tab-group": Node(role: "AXTabGroup", subrole: nil, children: ["editor-tab"]),
+            "editor-tab": Node(role: "AXRadioButton", subrole: "AXTabButton", children: []),
+            "native-tab-group": Node(role: "AXTabGroup", subrole: nil, children: ["project-a", "close", "project-b"]),
+            "project-a": Node(role: "AXRadioButton", subrole: "AXTabButton", children: []),
+            "project-b": Node(role: "AXRadioButton", subrole: "AXTabButton", children: []),
+            "close": Node(role: "AXButton", subrole: nil, children: []),
+            "radio-group": Node(role: "AXTabGroup", subrole: nil, children: ["generic-radio"]),
+            "generic-radio": Node(role: "AXRadioButton", subrole: nil, children: [])
+        ]
+
+        let result = NativeWindowTabGroupPolicy.tabElements(
+            windowChildren: ["root", "native-tab-group", "radio-group"],
+            children: { nodes[$0]?.children ?? [] },
+            role: { nodes[$0]?.role },
+            subrole: { nodes[$0]?.subrole }
+        )
+
+        XCTAssertEqual(result, ["project-a", "project-b"])
+    }
+
     func testTabExpandedDiagnosticDescriptionRedactsTabTitle() {
         let parent = WindowSnapshot(
             identity: WindowIdentity(windowID: 100, ownerProcessIdentifier: 10, title: "IDE"),

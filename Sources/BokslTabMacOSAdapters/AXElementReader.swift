@@ -15,6 +15,10 @@ enum AXElementReader {
         return (rawValue as? NSNumber)?.boolValue ?? false
     }
 
+    static func elements(from element: AXUIElement, attribute: String) -> [AXUIElement] {
+        rawAccessibilityValue(element, attribute: attribute) as? [AXUIElement] ?? []
+    }
+
     static func frame(of element: AXUIElement) -> CGRect? {
         guard let origin: CGPoint = accessibilityValue(element, attribute: kAXPositionAttribute),
               let size: CGSize = accessibilityValue(element, attribute: kAXSizeAttribute)

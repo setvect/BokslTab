@@ -708,6 +708,7 @@ struct AppTabExpansionEligibilityDecision {
 
 enum AccessibilityTabSource: String {
     case windowTabs = "window-tabs"
+    case windowTabGroup = "window-tab-group"
 }
 
 struct AccessibilityTabSnapshot: Equatable {
@@ -724,33 +725,76 @@ struct AccessibilityTabResolution {
     let durationMs: Int
 }
 
+struct AccessibilityTabElementResolution {
+    let elements: [AXUIElement]
+    let source: AccessibilityTabSource?
+    let skipReason: String?
+}
+
+enum NativeWindowTabGroupPolicy {
+    static func tabElements<Element>(
+        windowChildren: [Element],
+        children: (Element) -> [Element],
+        role: (Element) -> String?,
+        subrole: (Element) -> String?
+    ) -> [Element] {
+        windowChildren
+            .filter { role($0) == "AXTabGroup" }
+            .map { group in
+                children(group).filter {
+                    role($0) == "AXRadioButton" && subrole($0) == "AXTabButton"
+                }
+            }
+            .max { $0.count < $1.count }
+            ?? []
+    }
+}
+
 struct AccessibilityTabResolver {
     static func resolveTabs(in window: AXUIElement) -> AccessibilityTabResolution {
         let startedAt = CFAbsoluteTimeGetCurrent()
+        let resolution = resolveElements(in: window)
+        return AccessibilityTabResolution(
+            tabs: snapshots(from: resolution.elements, source: resolution.source ?? .windowTabs),
+            source: resolution.source,
+            skipReason: resolution.skipReason,
+            durationMs: elapsedMs(since: startedAt)
+        )
+    }
+
+    static func resolveElements(in window: AXUIElement) -> AccessibilityTabElementResolution {
         var rawTabs: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(window, kAXTabsAttribute as CFString, &rawTabs)
-        guard error == .success else {
-            return AccessibilityTabResolution(
-                tabs: [],
-                source: nil,
-                skipReason: "direct-axtabs-unavailable",
-                durationMs: elapsedMs(since: startedAt)
-            )
-        }
-        guard let tabElements = rawTabs as? [AXUIElement], !tabElements.isEmpty else {
-            return AccessibilityTabResolution(
-                tabs: [],
+        if error == .success,
+           let tabElements = rawTabs as? [AXUIElement],
+           !tabElements.isEmpty {
+            return AccessibilityTabElementResolution(
+                elements: tabElements,
                 source: .windowTabs,
-                skipReason: "no-tabs",
-                durationMs: elapsedMs(since: startedAt)
+                skipReason: nil
             )
         }
 
-        return AccessibilityTabResolution(
-            tabs: snapshots(from: tabElements, source: .windowTabs),
-            source: .windowTabs,
-            skipReason: nil,
-            durationMs: elapsedMs(since: startedAt)
+        let windowTabElements = NativeWindowTabGroupPolicy.tabElements(
+            windowChildren: AXElementReader.elements(from: window, attribute: kAXChildrenAttribute),
+            children: { AXElementReader.elements(from: $0, attribute: kAXChildrenAttribute) },
+            role: { AXElementReader.firstString(from: $0, attributes: [kAXRoleAttribute]) },
+            subrole: { AXElementReader.firstString(from: $0, attributes: [kAXSubroleAttribute]) }
+        )
+        if !windowTabElements.isEmpty {
+            return AccessibilityTabElementResolution(
+                elements: windowTabElements,
+                source: .windowTabGroup,
+                skipReason: nil
+            )
+        }
+
+        return AccessibilityTabElementResolution(
+            elements: [],
+            source: error == .success ? .windowTabs : nil,
+            skipReason: error == .success
+                ? "no-tabs"
+                : "direct-axtabs-and-window-tab-group-unavailable"
         )
     }
 
@@ -777,6 +821,7 @@ struct AccessibilityTabResolver {
 
     static func isSelected(_ element: AXUIElement) -> Bool {
         AXElementReader.bool(from: element, attribute: kAXSelectedAttribute)
+            || AXElementReader.bool(from: element, attribute: kAXValueAttribute)
     }
 
     private static func elapsedMs(since startedAt: CFAbsoluteTime) -> Int {

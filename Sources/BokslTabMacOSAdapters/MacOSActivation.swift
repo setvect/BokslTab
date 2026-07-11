@@ -143,19 +143,22 @@ public final class MacOSWindowActivator: WindowActivating {
             "window-activation.ax.tab.select method=\(selection.method) result=\(selection.success ? "success" : "failed") error=\(selection.errorCode.map(String.init) ?? "nil")"
         )
 
-        let raiseError = focusAndRaise(match.window)
-        guard selection.success, raiseError == .success else {
-            if raiseError == .success {
-                return .limitedAppFallbackSuccess
-            }
-            return fallbackToApp(
-                app: app,
-                intent: .focusOnly,
-                reason: "탭 선택 또는 창 올리기 액션이 실패해 앱 활성화로 대체했습니다: select=\(selection.success), raise=\(raiseError.rawValue)"
+        if selection.success {
+            BokslTabDiagnosticLog.write(
+                "window-activation.ax.tab.refocus skipped=true reason=tab-selection-success"
             )
+            return .exactWindowSuccess
         }
 
-        return .exactWindowSuccess
+        let raiseError = focusAndRaise(match.window)
+        if raiseError == .success {
+            return .limitedAppFallbackSuccess
+        }
+        return fallbackToApp(
+            app: app,
+            intent: .focusOnly,
+            reason: "탭 선택 또는 창 올리기 액션이 실패해 앱 활성화로 대체했습니다: select=false, raise=\(raiseError.rawValue)"
+        )
     }
 
     private func findAXWindowAndTab(
@@ -369,30 +372,16 @@ struct AXTabElementSnapshot {
     let element: AXUIElement
 
     static func tabs(in window: AXUIElement) -> [AXTabElementSnapshot] {
-        var rawTabs: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXTabsAttribute as CFString, &rawTabs) == .success,
-              let tabElements = rawTabs as? [AXUIElement]
-        else { return [] }
+        let tabElements = AccessibilityTabResolver.resolveElements(in: window).elements
 
         return tabElements.enumerated().map { index, element in
             AXTabElementSnapshot(
                 index: index,
-                title: title(of: element),
-                isSelected: isSelected(element),
+                title: AccessibilityTabResolver.title(of: element),
+                isSelected: AccessibilityTabResolver.isSelected(element),
                 element: element
             )
         }
-    }
-
-    private static func title(of element: AXUIElement) -> String? {
-        AXElementReader.firstString(
-            from: element,
-            attributes: [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute]
-        )
-    }
-
-    private static func isSelected(_ element: AXUIElement) -> Bool {
-        AXElementReader.bool(from: element, attribute: kAXSelectedAttribute)
     }
 }
 

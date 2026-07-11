@@ -109,7 +109,7 @@ macOS 권한이나 앱 상태에 따라 창 제목을 가져오지 못할 수 �
 
 ### IntelliJ 탭 그룹 확인
 
-IntelliJ에서 여러 프로젝트를 연 뒤 `Window > Merge All Project Windows`를 실행합니다. BokslTab 목록에서 각 프로젝트 탭이 별도 항목으로 보이고 선택 시 해당 탭으로 이동하는지 확인합니다. MVP는 지원 앱 allowlist에서 direct `AXTabs`로 노출되는 macOS 탭만 펼치며, 브라우저 내부 웹 탭은 펼치지 않습니다. 로그에는 `window-catalog.ax.tabs`, `window-activation.ax.tab` 항목이 남습니다.
+IntelliJ에서 여러 프로젝트를 연 뒤 `Window > Merge All Project Windows`를 실행합니다. BokslTab 목록에서 각 프로젝트 탭이 별도 항목으로 보이고 선택 시 해당 탭으로 이동하는지 확인합니다. 지원 앱 allowlist에서 direct `AXTabs` 또는 창 바로 아래의 네이티브 `AXTabGroup`/`AXTabButton`으로 노출되는 macOS 탭을 펼치며, 브라우저 내부 웹 탭은 펼치지 않습니다. 로그에는 `window-catalog.ax.tabs`, `window-activation.ax.tab` 항목이 남습니다.
 
 ## 설치 / 배포
 
