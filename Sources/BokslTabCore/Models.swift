@@ -181,7 +181,7 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
             return [id]
         case .window(let window):
             var projectedIDs = [id]
-            if window.source == .accessibilityEvent,
+            if (window.source == .accessibilityEvent || window.tab != nil),
                let title = window.title,
                let stableTitleID = SwitcherItem.stableTitleAliasID(
                    ownerProcessIdentifier: window.ownerProcessIdentifier,

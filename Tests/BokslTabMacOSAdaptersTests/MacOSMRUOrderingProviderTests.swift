@@ -190,6 +190,55 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(context.fallbackReason, "no-matching-front-to-back-windows")
     }
 
+    func testProviderMapsTabHistoryAfterParentWindowIDChanges() {
+        let app = AppIdentity(processIdentifier: 10, localizedName: "IntelliJ IDEA")
+        let previousTab = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 400,
+                ownerProcessIdentifier: 10,
+                title: "Project A – Main.swift",
+                tab: WindowTabIdentity(
+                    parentWindowID: 400,
+                    index: 0,
+                    title: "Project A – Main.swift"
+                )
+            ))
+        )
+        let currentTab = SwitcherItem(
+            app: app,
+            kind: .window(WindowIdentity(
+                windowID: 400,
+                ownerProcessIdentifier: 10,
+                title: "Project B",
+                tab: WindowTabIdentity(
+                    parentWindowID: 400,
+                    index: 1,
+                    title: "Project B",
+                    isSelected: true
+                )
+            ))
+        )
+        let previousTitleAlias = SwitcherItem.stableTitleAliasID(
+            ownerProcessIdentifier: 10,
+            title: "Project A – Older.swift"
+        )!
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(infoList: [windowInfo(windowID: 400, pid: 10)]),
+            initialRecentItemIDs: [previousTitleAlias]
+        )
+
+        let context = provider.orderingContext(
+            for: .allAppsAndWindows,
+            items: [previousTab, currentTab]
+        )
+        let ordered = SwitcherMRUOrderer.order(items: [previousTab, currentTab], context: context)
+
+        XCTAssertEqual(context.orderedItemIDs, [currentTab.id, previousTab.id])
+        XCTAssertEqual(context.currentItemID, currentTab.id)
+        XCTAssertEqual(ordered.map(\.id), [currentTab.id, previousTab.id])
+    }
+
 
     private func windowInfo(windowID: UInt32, pid: Int32) -> [String: Any] {
         [

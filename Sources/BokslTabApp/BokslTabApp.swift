@@ -389,7 +389,7 @@ final class SwitcherCoordinator {
         )
         let diagnostics = SwitcherMRUOrderer.diagnostics(items: items, context: context)
         BokslTabDiagnosticLog.write(
-            "mru.order mode=\(mode.rawValue) source=\(context.sourceDescription) fallback=\(context.fallbackReason ?? "none") partialFallback=\(diagnostics.partialFallbackReason ?? "none") items=\(items.count) ordered=\(orderedItems.count) selectedIndex=\(selectedIndex) matched=\(diagnostics.matchedItemCount) unmatched=\(diagnostics.unmatchedItemCount) current=\(context.currentItemID ?? "none")"
+            "mru.order mode=\(mode.rawValue) source=\(context.sourceDescription) fallback=\(context.fallbackReason ?? "none") partialFallback=\(diagnostics.partialFallbackReason ?? "none") items=\(items.count) ordered=\(orderedItems.count) selectedIndex=\(selectedIndex) matched=\(diagnostics.matchedItemCount) unmatched=\(diagnostics.unmatchedItemCount) current=\(context.currentItemID ?? "none") orderedIDs=\(orderedItems.map(\.id).joined(separator: ","))"
         )
         return SwitcherPresentation(items: orderedItems, selectedIndex: selectedIndex)
     }

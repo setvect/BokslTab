@@ -312,7 +312,10 @@ final class SwitcherStateTests: XCTestCase {
 
         XCTAssertEqual(item.id, "tab:42:7:2")
         XCTAssertEqual(item.title, "Project C")
-        XCTAssertEqual(item.mruProjectedIDs, ["tab:42:7:2", "window:42:7", "app:7"])
+        XCTAssertEqual(
+            item.mruProjectedIDs,
+            ["tab:42:7:2", "stable-title:7:project c", "window:42:7", "app:7"]
+        )
     }
 
 
