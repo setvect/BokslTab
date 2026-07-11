@@ -137,20 +137,41 @@ public final class MacOSWindowActivator: WindowActivating {
             "window-activation.ax.tab.match result=\(match.matchDescription) pid=\(app.processIdentifier) parentWindow=\(targetTab.parentWindowID) index=\(targetTab.index)"
         )
 
+        let activationPlan = AXTabActivationPlan.resolve(
+            parentIsMain: AXElementReader.bool(from: match.window, attribute: kAXMainAttribute)
+        )
+        BokslTabDiagnosticLog.write(
+            "window-activation.ax.tab.parent-focus plan=\(activationPlan.logDescription)"
+        )
+
         _ = appActivator.activate(app: app)
+        let preselectionRaiseError: AXError?
+        switch activationPlan {
+        case .selectOnly:
+            preselectionRaiseError = nil
+        case .focusParentThenSelect:
+            preselectionRaiseError = focusAndRaise(match.window)
+            BokslTabDiagnosticLog.write(
+                "window-activation.ax.tab.parent-focus action=focus-raise result=\(preselectionRaiseError?.rawValue ?? AXError.failure.rawValue)"
+            )
+        }
+
         let selection = select(tab: match.tab.element)
         BokslTabDiagnosticLog.write(
             "window-activation.ax.tab.select method=\(selection.method) result=\(selection.success ? "success" : "failed") error=\(selection.errorCode.map(String.init) ?? "nil")"
         )
 
         if selection.success {
+            guard preselectionRaiseError == nil || preselectionRaiseError == .success else {
+                return .limitedAppFallbackSuccess
+            }
             BokslTabDiagnosticLog.write(
                 "window-activation.ax.tab.refocus skipped=true reason=tab-selection-success"
             )
             return .exactWindowSuccess
         }
 
-        let raiseError = focusAndRaise(match.window)
+        let raiseError = preselectionRaiseError ?? focusAndRaise(match.window)
         if raiseError == .success {
             return .limitedAppFallbackSuccess
         }
@@ -290,6 +311,24 @@ public final class MacOSWindowActivator: WindowActivating {
             return .limitedAppFallbackSuccess
         case .safeFailure(let activationReason):
             return .safeFailure(reason: "\(reason) 앱 활성화도 실패했습니다: \(activationReason)")
+        }
+    }
+}
+
+enum AXTabActivationPlan: Equatable {
+    case selectOnly
+    case focusParentThenSelect
+
+    static func resolve(parentIsMain: Bool) -> AXTabActivationPlan {
+        parentIsMain ? .selectOnly : .focusParentThenSelect
+    }
+
+    var logDescription: String {
+        switch self {
+        case .selectOnly:
+            return "select-only"
+        case .focusParentThenSelect:
+            return "focus-parent-then-select"
         }
     }
 }

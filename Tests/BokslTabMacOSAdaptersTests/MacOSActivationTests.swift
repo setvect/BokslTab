@@ -3,6 +3,14 @@ import BokslTabCore
 import XCTest
 
 final class MacOSActivationTests: XCTestCase {
+    func testTabActivationSelectsOnlyWhenParentIsAlreadyMain() {
+        XCTAssertEqual(AXTabActivationPlan.resolve(parentIsMain: true), .selectOnly)
+    }
+
+    func testTabActivationFocusesParentBeforeSelectionWhenAnotherWindowIsMain() {
+        XCTAssertEqual(AXTabActivationPlan.resolve(parentIsMain: false), .focusParentThenSelect)
+    }
+
     func testCachedWindowFallbackReopensAppWhenTargetWindowCannotBeMatched() {
         let app = AppIdentity(
             processIdentifier: 999_001,
