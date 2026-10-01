@@ -38,7 +38,8 @@ let package = Package(
                 "BokslTabCore",
                 "BokslTabMacOSAdapters",
                 "BokslTabUI"
-            ]
+            ],
+            resources: [.copy("Resources/AboutBoksl.png")]
         ),
         .testTarget(
             name: "BokslTabAppTests",

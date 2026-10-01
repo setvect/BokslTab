@@ -24,8 +24,10 @@ fi
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$SOURCE_BINARY" "$EXECUTABLE_PATH"
+cp -R "$(dirname "$SOURCE_BINARY")/BokslTab_BokslTabApp.bundle" "$RESOURCES_DIR/"
 chmod +x "$EXECUTABLE_PATH"
 
+BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,6 +52,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>0.1.0</string>
   <key>CFBundleVersion</key>
   <string>1</string>
+  <key>BokslTabBuildDate</key>
+  <string>$BUILD_DATE</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>

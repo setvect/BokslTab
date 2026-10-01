@@ -22,6 +22,10 @@ struct BokslTabApplication: App {
 
             Divider()
 
+            Button("BokslTab이란?") {
+                BokslTabAbout.show()
+            }
+
             Button("BokslTab 종료") {
                 NSApplication.shared.terminate(nil)
             }
