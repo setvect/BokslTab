@@ -150,6 +150,8 @@ final class SwitcherCoordinator {
     private var currentWarning: String?
     private var startupWarning: String?
     private var previousFrontmostApp: AppIdentity?
+    private var presentedApps: [AppIdentity] = []
+    private var presentedActiveApp: AppIdentity?
 
     init(
         runningAppProvider: RunningAppProviding,
@@ -171,6 +173,11 @@ final class SwitcherCoordinator {
     }
 
     func start() {
+        (windowCatalogProvider as? WindowCatalogRefreshing)?.onDidRefresh = { [weak self] in
+            self?.refreshVisibleItems()
+        }
+        // Warm details before the first keyboard gesture, without waiting for AX responses.
+        _ = windowCatalogProvider.windowsForAllApps(including: runningAppProvider.runningApps())
         let allAppsDefinition = SwitcherMode.allAppsAndWindows.defaultHotkeyDefinition
         let activeAppDefinition = SwitcherMode.activeAppWindows.defaultHotkeyDefinition
         let definitions = [
@@ -246,6 +253,7 @@ final class SwitcherCoordinator {
 
     func stop() {
         BokslTabDiagnosticLog.write("coordinator.stop")
+        (windowCatalogProvider as? WindowCatalogRefreshing)?.onDidRefresh = nil
         hotkeyService.stop()
     }
 
@@ -357,26 +365,40 @@ final class SwitcherCoordinator {
         let selectedIndex: Int
     }
 
-    private func presentation(for mode: SwitcherMode) -> SwitcherPresentation {
+    private func refreshVisibleItems() {
+        guard panelController.isVisible else { return }
+        let presentation = presentation(for: state.mode, refreshing: true)
+        if state.mergeRefreshedItems(presentation.items) {
+            panelController.update(state: state, warning: currentWarning)
+        }
+    }
+
+    private func presentation(for mode: SwitcherMode, refreshing: Bool = false) -> SwitcherPresentation {
         switch mode {
         case .allAppsAndWindows:
-            let apps = runningAppProvider.runningApps()
+            let apps = refreshing ? presentedApps : runningAppProvider.runningApps()
+            if !refreshing { presentedApps = apps }
             let windows = windowCatalogProvider.windowsForAllApps(including: apps)
             let items = SwitcherItemComposer.composeAllAppsAndWindows(
                 apps: apps,
                 windows: windows,
                 currentProcessIdentifier: getpid()
             )
-            return orderForMRU(mode: mode, items: items)
+            return refreshing
+                ? SwitcherPresentation(items: items, selectedIndex: state.selectedIndex)
+                : orderForMRU(mode: mode, items: items)
         case .activeAppWindows:
-            guard let app = runningAppProvider.frontmostApp() else {
+            if !refreshing { presentedActiveApp = runningAppProvider.frontmostApp() }
+            guard let app = presentedActiveApp else {
                 return SwitcherPresentation(items: [], selectedIndex: 0)
             }
             let items = SwitcherItemComposer.composeActiveAppWindows(
                 app: app,
                 windows: windowCatalogProvider.windows(for: app)
             )
-            return orderForMRU(mode: mode, items: items)
+            return refreshing
+                ? SwitcherPresentation(items: items, selectedIndex: state.selectedIndex)
+                : orderForMRU(mode: mode, items: items)
         }
     }
 

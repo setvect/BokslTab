@@ -94,6 +94,14 @@ public final class MacOSWindowActivator: WindowActivating {
             return fallbackToApp(app: app, intent: .focusOnly, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
         }
 
+        if AccessibilityQueryBudget.isCoolingDown(app.processIdentifier) {
+            return fallbackToApp(
+                app: app,
+                intent: .focusOnly,
+                reason: "창 정보 조회에 응답하지 않는 앱이라 앱 활성화로 대체했습니다."
+            )
+        }
+
         if window.tab != nil {
             return activateTab(window: window, app: app)
         }

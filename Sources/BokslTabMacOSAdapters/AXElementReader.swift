@@ -32,7 +32,7 @@ enum AXElementReader {
 
     private static func rawAccessibilityValue(_ element: AXUIElement, attribute: String) -> CFTypeRef? {
         var rawValue: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, attribute as CFString, &rawValue) == .success ? rawValue : nil
+        return AccessibilityQueryBudget.copyAttributeValue(element, attribute as CFString, &rawValue) == .success ? rawValue : nil
     }
 
     private static func convert<T>(_ rawValue: CFTypeRef) -> T? {

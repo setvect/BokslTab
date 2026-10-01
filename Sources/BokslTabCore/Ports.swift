@@ -11,6 +11,11 @@ public protocol WindowCatalogProviding {
     func windows(for app: AppIdentity) -> [WindowIdentity]
 }
 
+/// Completion notifications are delivered on the main queue; catalog reads remain synchronous and nonblocking.
+public protocol WindowCatalogRefreshing: AnyObject {
+    var onDidRefresh: (() -> Void)? { get set }
+}
+
 public extension WindowCatalogProviding {
     func windowsForAllApps(including apps: [AppIdentity]) -> [WindowIdentity] {
         windowsForAllApps()

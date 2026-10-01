@@ -42,6 +42,24 @@ final class MacOSActivationTests: XCTestCase {
         XCTAssertEqual(appActivator.activations.map(\.intent), [.reopenIfNeeded])
     }
 
+    func testUnresponsiveAppUsesAppActivationWithoutAnotherWindowQuery() {
+        let app = AppIdentity(processIdentifier: 999_105, localizedName: "Unresponsive")
+        let _: Void? = AccessibilityQueryBudget.perform(for: app.processIdentifier) {
+            AccessibilityQueryBudget.recordCurrent(.cannotComplete)
+        }
+        defer { AccessibilityQueryBudget.prune(to: []) }
+        let appActivator = RecordingAppActivator(result: .appActivationSuccess)
+        let activator = MacOSWindowActivator(appActivator: appActivator, isAccessibilityTrusted: { true })
+        let start = ProcessInfo.processInfo.systemUptime
+        let result = activator.activate(
+            window: WindowIdentity(windowID: 42, ownerProcessIdentifier: app.processIdentifier),
+            app: app
+        )
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.2)
+        XCTAssertEqual(result, .limitedAppFallbackSuccess)
+        XCTAssertEqual(appActivator.activations.map(\.intent), [.focusOnly])
+    }
+
     func testAccessibilityDeniedFallbackOnlyFocusesApp() {
         let app = AppIdentity(processIdentifier: 999_002, localizedName: "테스트 앱")
         let window = WindowIdentity(
