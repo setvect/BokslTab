@@ -41,6 +41,10 @@ let package = Package(
             ]
         ),
         .testTarget(
+            name: "BokslTabAppTests",
+            dependencies: ["BokslTabApp", "BokslTabCore", "BokslTabMacOSAdapters"]
+        ),
+        .testTarget(
             name: "BokslTabCoreTests",
             dependencies: ["BokslTabCore"]
         ),

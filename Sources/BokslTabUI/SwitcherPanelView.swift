@@ -33,7 +33,7 @@ public struct SwitcherPanelView: View {
     }
 
     public var body: some View {
-        let metrics = SwitcherPanelLayout.metrics(itemCount: items.count, availableSize: availableSize)
+        let metrics = SwitcherPanelLayout.metrics(itemCount: items.count, availableSize: availableSize, warning: warning)
 
         VStack(alignment: .leading, spacing: 0) {
             if items.isEmpty {
@@ -131,10 +131,9 @@ enum SwitcherPanelLayout {
     static let minimumResolutionScale: CGFloat = 0.74
     static let maximumResolutionScale: CGFloat = 1.0
     static let scaleReferenceHeight: CGFloat = 1440
-    static let defaultAvailableSize = CGSize(width: 1280, height: 800)
 
-    static func metrics(itemCount: Int, availableSize: CGSize) -> SwitcherPanelMetrics {
-        let safeCount = max(itemCount, 1)
+    static func metrics(itemCount: Int, availableSize: CGSize, warning: String? = nil) -> SwitcherPanelMetrics {
+        let safeCount = itemCount == 0 ? 2 : max(itemCount, 1)
         let resolutionScale = resolutionScale(for: availableSize)
         let scaledBaseRowHeight = floor(baseRowHeight * resolutionScale)
         let scaledMinimumRowHeight = minimumRowHeight
@@ -143,7 +142,7 @@ enum SwitcherPanelLayout {
         let maxPanelWidth = max(1, availableSize.width - screenEdgeMargin * 2)
         let panelWidth = min(desiredPanelWidth, maxPanelWidth)
         let maxPanelHeight = max(1, availableSize.height - screenEdgeMargin * 2)
-        let maxListHeight = max(1, maxPanelHeight - panelPadding * 2)
+        let maxListHeight = max(1, maxPanelHeight - panelPadding * 2 - (warning == nil ? 0 : 28))
         let minimumUsableRowHeight = min(scaledMinimumRowHeight, maxListHeight)
         let noScrollCandidateRowHeight = floor(maxListHeight / CGFloat(safeCount))
         let guardrailRequiresScroll = itemCount > 0 && itemCount < scrollThreshold && noScrollCandidateRowHeight < minimumUsableRowHeight
@@ -175,7 +174,6 @@ enum SwitcherPanelLayout {
         )
     }
 
-
     static func resolutionScale(for availableSize: CGSize) -> CGFloat {
         let rawScale = availableSize.height / scaleReferenceHeight
         return clamped(rawScale, lower: minimumResolutionScale, upper: maximumResolutionScale)
@@ -184,15 +182,14 @@ enum SwitcherPanelLayout {
     static func panelFrame(
         itemCount: Int,
         warning: String?,
-        visibleFrame: CGRect,
-        fittingSize: CGSize = .zero
+        visibleFrame: CGRect
     ) -> CGRect {
-        let metrics = metrics(itemCount: itemCount, availableSize: visibleFrame.size)
+        let metrics = metrics(itemCount: itemCount, availableSize: visibleFrame.size, warning: warning)
         let warningHeight: CGFloat = warning == nil ? 0 : 28
         let maxWidth = max(1, visibleFrame.width - screenEdgeMargin * 2)
         let maxHeight = max(1, visibleFrame.height - screenEdgeMargin * 2)
-        let width = min(maxWidth, max(metrics.panelWidth, fittingSize.width))
-        let height = min(maxHeight, max(metrics.panelHeight + warningHeight, fittingSize.height))
+        let width = min(maxWidth, metrics.panelWidth)
+        let height = min(maxHeight, metrics.panelHeight + warningHeight)
         let size = CGSize(width: width, height: height)
         let preferredOrigin = CGPoint(
             x: visibleFrame.midX - size.width / 2,
@@ -215,9 +212,6 @@ enum SwitcherPanelLayout {
         return min(max(value, lower), upper)
     }
 
-    static func listHeight(itemCount: Int) -> CGFloat {
-        metrics(itemCount: itemCount, availableSize: defaultAvailableSize).listHeight
-    }
 }
 
 private struct WarningBanner: View {

@@ -1,212 +1,63 @@
-# BokslTab 아키텍처 계획
+# BokslTab 아키텍처
 
-## 1. 목적
+현재 SwiftPM 구현의 책임과 실행 흐름을 설명한다. 초기 구현 계획은 `plan.md`를 참고한다.
 
-이 문서는 `docs/requirements.md`와 `docs/prd.md`를 기준으로 BokslTab MVP 구현 전 아키텍처를 정의한다. 이번 단계는 **계획 문서 작성만** 수행하며 코드를 작성하지 않는다.
+## 모듈과 책임
 
-BokslTab MVP의 핵심은 macOS 기본 `Cmd+Tab`의 앱 중심 전환 한계를 보완해, 앱과 창을 리스트로 보여주고 키보드로 선택해 전환하는 것이다.
-
-## 2. RALPLAN 합의 요약
-
-### Antithesis
-
-작은 MVP라면 창 단위 전환을 제외하고 앱 단위 전환과 UI 검증만 먼저 구현하는 것이 더 안전할 수 있다. macOS 창 활성화는 Accessibility, CoreGraphics, AppKit 조합과 권한 문제 때문에 MVP를 불안정하게 만들 수 있다.
-
-### Tradeoff
-
-- 창 단위 전환 제외: 구현은 쉬워지지만 BokslTab의 핵심 문제인 “같은 앱의 여러 창을 구분하지 못하는 Cmd+Tab 불편”을 검증하지 못한다.
-- 창 단위 전환 포함: 구현 리스크는 커지지만 제품 가설을 직접 검증할 수 있다.
-
-### Synthesis
-
-창 단위 전환은 MVP 필수 범위로 유지한다. 대신 UI polish보다 **window catalog / exact window raise spike**를 먼저 수행하고, 실패 시 앱 단위 fallback과 안전 실패를 명확히 둔다.
-
-## 3. 기술 스택
-
-| 영역 | 선택 | 이유 |
-| --- | --- | --- |
-| 언어 | Swift | macOS 네이티브 API 접근과 XCTest 연동이 좋다 |
-| UI | SwiftUI + AppKit | 리스트 UI는 SwiftUI, floating panel/activation 제어는 AppKit 사용 |
-| 앱 목록 | AppKit `NSWorkspace`, `NSRunningApplication` | 실행 앱과 앱 아이콘/이름 조회에 적합 |
-| 창 목록 | CoreGraphics Quartz Window Services | window ID, owner PID/name, bounds/title 등 창 metadata 조회 후보 |
-| 창 제어 | Accessibility `AXUIElement` | 특정 창 focus/raise, 창 속성 접근 후보 |
-| 전역 단축키 | native-first, 필요 시 작은 HotKey 패키지 fallback | MVP는 의존성 최소화. 단축키가 병목이면 제한적으로 패키지 검토 |
-| 테스트 | XCTest | Swift 기본 테스트 도구 |
-| 배포 | 로컬 개발 실행만 | 서명/공증/배포 자동화는 MVP 제외 |
-
-## 4. 외부 API 근거와 제약
-
-- Apple `NSRunningApplication.activate(options:)`는 앱 활성화를 “시도”하고 system이 허용했는지 Boolean을 반환하지만, 활성화 자체가 항상 보장되지는 않는다.
-- Apple `CGWindowListCopyWindowInfo`는 현재 GUI session의 window dictionary 목록을 반환하며, system window dictionary 생성은 상대적으로 비싼 작업일 수 있으므로 남용하지 않는다.
-- Apple `AXUIElement` 계열 API는 accessibility object의 속성 조회/변경/동작 요청을 제공하지만, unsupported/no value/cannot complete/not implemented 같은 실패가 가능하다.
-
-따라서 BokslTab은 exact window raise를 성공/실패가 있는 operation으로 취급하고, app-level activation fallback을 별도로 기록한다.
-
-## 5. 레이어 구조
-
-```text
-UI
- ↓ uses
-Core ports / state
- ↑ implemented by
-MacOSAdapters
-```
-
-### 5.1 Core
-
-순수 Swift 레이어다. AppKit, CoreGraphics, Accessibility를 import하지 않는다.
-
-책임:
-
-- 전환 항목 모델
-- 전환 모드 모델
-- 선택 상태와 키보드 이동 reducer
-- 리스트 filtering/sorting 규칙
-- title/icon fallback 규칙
-- adapter protocol 정의
-- 실패 상태 모델링
-
-예상 타입:
-
-- `SwitcherItem`
-- `SwitcherMode`
-- `SwitcherState`
-- `SwitcherSelectionReducer`
-- `WindowIdentity`
-- `AppIdentity`
-- `SwitchResult`
-- `PermissionState`
-
-### 5.2 MacOSAdapters
-
-macOS API 의존 레이어다. Core의 protocol을 구현한다.
-
-주요 어댑터:
-
-| Adapter | 책임 |
+| 모듈 | 책임 |
 | --- | --- |
-| `RunningAppProvider` | 실행 앱 목록, app name, icon, PID, bundle identifier 조회 |
-| `WindowCatalogProvider` | 전환 가능한 창 목록, window title, owner PID, window ID 조회 |
-| `AppActivator` | 앱 단위 foreground activation 시도 |
-| `WindowActivator` | exact window raise 시도 |
-| `HotkeyService` | 전역 단축키 등록/해제 |
-| `PermissionAdvisor` | Accessibility 및 Privacy/Screen Recording 관련 가능성 안내 상태 제공 |
+| `BokslTabCore` | 앱·창·탭 모델, 목록 조합, 선택 유지, MRU 순서, 어댑터 인터페이스 |
+| `BokslTabMacOSAdapters` | CoreGraphics·Accessibility·AppKit 연동, 단축키 등록, 권한 조회, 진단 로그 |
+| `BokslTabUI` | 단일 AppKit 패널, SwiftUI 목록, 키 입력과 반복, 화면 배치 |
+| `BokslTabApp` | 서비스 조립과 `SwitcherCoordinator`의 표시·갱신·활성화 흐름 |
 
-### 5.3 UI
+Core는 AppKit 및 Accessibility에 의존하지 않는다. App이 하나의 `MacOSAccessibilityService`를 만들어 창 목록 제공자와 창 활성화기에 주입한다.
 
-사용자에게 전환 UI를 표시하는 레이어다. macOS API를 직접 호출하지 않고 Core state와 ports를 통해 동작한다.
+## 창 목록 표시와 갱신
 
-책임:
+1. 시작 시와 새로운 전환 목록을 열 때 `requestRefresh(including:)`로 상세 조회를 예약한다.
+2. 목록 읽기는 현재 CoreGraphics 창 정보와 이미 수집한 캐시로 즉시 결과를 만든다. 읽기 자체는 AX 조회를 예약하거나 기다리지 않는다.
+3. AX 작업은 공유 서비스의 직렬 작업 큐에서 실행한다. 앱별 갱신 요청은 하나만 실행·대기할 수 있다.
+4. 캐시 완료 알림은 50ms 동안 모아서 메인 큐에 전달한다. coordinator는 표시 중인 목록을 다시 읽고 선택 대상을 보존해 병합한다.
+5. 패널과 hosting controller를 재사용한다. 항목 수에 따라 프레임을 다시 계산하므로 탭 확장 시 크기도 갱신된다.
 
-- floating switcher panel 표시/닫기
-- row rendering: app icon + window/app title
-- 선택 하이라이트 표시
-- keyboard navigation event 전달
-- empty/error/permission guidance 표시
+`BackgroundRefreshCache`는 값의 유효 기간(5초), 갱신 간격(0.5초), 진행 중 요청과 오래된 결과 폐기를 관리한다. 앱의 응답 실패와 재시도 시점은 관리하지 않는다.
 
-## 6. 권장 폴더 구조
+창 목록 관련 파일은 다음 책임으로 나눈다.
 
-SwiftPM 기준의 작은 구조를 기본안으로 둔다. Xcode project를 선택해도 같은 모듈 경계를 유지한다.
+| 파일 | 책임 |
+| --- | --- |
+| `MacOSWindowCatalogProvider` | CG 목록과 AX·제목·이벤트 캐시를 조합하고 상세 갱신을 요청 |
+| `AccessibilityWindowDiscovery` | 한 앱의 AX 창과 보조 창을 조회해 스냅샷 생성 |
+| `WindowSnapshots` | 창 스냅샷, CG 정보 파싱, 합성 ID와 기하 정보 |
+| `WindowCatalogPolicies` | 창 매칭, 제목 보완, 중복 제거 규칙 |
+| `WindowTabCatalog` | 탭 지원 앱 판별, AX 탭 해석, 탭별 행 확장 |
+| `AccessibilityWindowEventCache` | AX 이벤트 구독, 백그라운드 수집, 최근 창 보관 |
+| `AccessibilityEventHistory` | 이벤트 이력의 보존·매칭·목록 변환 규칙 |
+| `WindowTitleCache` | 제목 보완용 캐시와 개수 제한 |
 
-```text
-BokslTab/
-  Package.swift 또는 BokslTab.xcodeproj
-  Sources/
-    BokslTabApp/
-      BokslTabApp.swift
-      AppDelegate.swift
-    BokslTabCore/
-      Models/
-      State/
-      Ports/
-      Reducers/
-    BokslTabMacOSAdapters/
-      RunningAppProvider/
-      WindowCatalogProvider/
-      Activation/
-      Hotkeys/
-      Permissions/
-    BokslTabUI/
-      SwitcherPanel/
-      Rows/
-      States/
-  Tests/
-    BokslTabCoreTests/
-    BokslTabAdapterContractTests/
-  docs/
-```
+## 응답 제한과 활성화
 
-## 7. 주요 모듈
+`MacOSAccessibilityService`가 앱별 재시도 제한을 단독으로 소유한다. 조회·이벤트 감시·활성화 모두 같은 상태를 사용한다. 응답 실패 또는 요청 시간 소진 시 해당 앱에 15초 동안 추가 AX 요청을 보내지 않는다. 대기 중 재요청으로 제한 시간이 연장되지 않는다.
 
-### 7.1 AppCatalog / RunningAppProvider
+`AccessibilityQueryBudget`는 각 작업에 명시적으로 전달한다. 전역 변수나 스레드 사전에 의존하지 않는다. 모든 AX 속성 읽기·쓰기·동작 요청과 이벤트 구독에 제한을 적용한다.
 
-- 실행 앱 목록 조회
-- BokslTab 자체 제외
-- background/system-like process 필터링
-- 앱 이름/icon fallback 제공
+- 창 정보 조회: 개별 호출 최대 80ms, 한 앱의 작업 최대 250ms.
+- 창 올리기·탭 선택: 개별 호출 최대 250ms, 작업 최대 1초.
+- 실제 제한은 남은 시간과 개별 호출 제한 중 작은 값이다. 이미 시작한 시스템 호출의 반환은 OS 타임아웃에 따른다.
 
-### 7.2 WindowCatalogProvider
+창 활성화는 비동기 인터페이스다. AX 대상 식별과 동작은 작업 큐에서 실행하고, 앱을 앞으로 가져오는 AppKit 호출과 결과 반영은 메인 액터에서 실행한다. 새 전환 요청이나 종료는 이전 작업을 취소한다. 취소된 작업은 대기 이후 앱 포커스를 변경하거나 다음 AX 동작을 시작하지 않는다. 이미 전달된 시스템 동작을 되돌리지는 않는다.
 
-- 모든 앱/창 모드용 window list 생성
-- 활성 앱 창 모드용 foreground app window list 생성
-- 창 제목 누락 시 fallback title 적용
-- 단일 활성 앱 창은 **1개 row로 표시**한다. 사용자가 확정하면 같은 창을 다시 raise 시도한다.
+창을 정확히 찾지 못하거나 AX 요청이 지연되면 앱 활성화로 대체한다. 현재 선택한 탭을 찾지 못한 경우 다른 탭으로 임의 전환하지 않는다.
 
-### 7.3 SwitcherState
+## 단축키 등록
 
-- 현재 모드
-- 항목 리스트
-- 선택 index
-- loading/empty/error/permission 상태
-- next/previous/confirm/cancel 처리
+`GlobalHotkeyServicing.start`가 실패하면 등록을 모두 정리한다. Carbon과 우선순위 서비스 모두 이 계약을 따른다. 활성 앱 단축키 등록 실패 시 coordinator가 기본 Cmd+Tab만 다시 등록하고, 성공 후 제한 상태를 알린다.
 
-### 7.4 WindowActivator / AppActivator
+macOS 기본 Cmd+Tab 설정의 변경·복원은 `NativeCommandTabHotkeyService`가 담당한다. 우선순위 서비스는 native override, EventTap, Carbon 사용 순서를 결정한다.
 
-- window row: exact window raise 먼저 시도
-- exact raise 성공: `exact-window-success`
-- exact raise 실패 후 app activation 성공: `limited-app-fallback-success`
-- 둘 다 실패: `safe-failure`
+## 로그와 테스트
 
-### 7.5 HotkeyService
+앱 시작 시 파일 로그를 활성화한다. 라이브러리와 테스트에서는 기본적으로 사용자의 로그 파일에 기록하지 않는다. 파일 쓰기와 날짜 포맷은 별도 직렬 큐에서 처리한다. 현재 로그와 이전 로그를 각각 최대 5MiB로 제한한다. `--debug-logging`을 지정하면 창 목록의 상세 진단도 기록한다.
 
-- 모든 앱/창 모드 hotkey
-- 활성 앱 창 모드 hotkey
-- 등록 실패 시 개발용 diagnostic 기록
-- 설정 UI는 MVP 제외
-
-### 7.6 PermissionAdvisor
-
-- Accessibility permission 필요 가능성 안내
-- CGWindow title/metadata 접근이 macOS Privacy 또는 Screen Recording 정책과 충돌할 가능성 안내
-- 정확한 권한 요구는 spike 단계에서 확인한다.
-
-## 8. 위험 요소와 fallback 전략
-
-| 위험 | 영향 | fallback |
-| --- | --- | --- |
-| Accessibility 권한 거부 | exact window raise 불가 | 권한 안내 표시, 앱 단위 activation만 허용 |
-| 창 title 누락 | row 식별성 저하 | app name 또는 fallback title 표시 |
-| 선택 직전 창 닫힘 | 전환 실패 | 리스트 refresh 또는 panel close, no crash |
-| exact window raise 실패 | 선택 창으로 정확히 이동 실패 | app activation fallback, 결과는 제한 성공으로 기록 |
-| app activation 실패 | 전환 실패 | safe failure, panel close/log |
-| hotkey 등록 실패 | UI 열기 불가 | diagnostic 기록, 대체 hotkey는 구현 단계에서 상수로 조정 |
-| 창 목록 조회 비용 | UI 지연 | 단축키 시점 조회 최소화, 필요 시 가벼운 cache |
-| 화면 기록/Privacy 제약 | title/metadata 제한 가능 | 권한 안내 또는 fallback title |
-
-## 9. 제외 범위 확인
-
-MVP에서 하지 않는다.
-
-- 창 썸네일
-- 화면 캡처 preview
-- 설정 UI
-- 창 검색
-- 창 이동/리사이즈/정렬
-- 코드 서명/공증/배포 자동화
-- 완성형 디자인 시스템
-
-## 10. 참고 자료
-
-- Apple Developer Documentation — `NSRunningApplication.activate(options:)`
-- Apple Developer Documentation — `CGWindowListCopyWindowInfo`
-- Apple Developer Documentation — `AXUIElementCopyAttributeValue`, `AXUIElementSetAttributeValue`
+테스트는 Core 상태, 창·탭 정책, 캐시, AX 시스템 경계, 단축키 수명 주기, 패널 배치, coordinator 통합으로 구분한다. AX API를 교체해 실제 제한·재시도·취소 코드가 실행되도록 검증한다. 실제 앱의 권한 및 창·탭 전환은 별도 수동 검증 대상이다.

@@ -5,7 +5,6 @@ final class BackgroundRefreshCache<Key: Hashable, Value> {
     private struct Entry {
         var value: Value?
         var updatedAt: TimeInterval = 0
-        var retryAfter: TimeInterval = 0
         var requestID: UUID?
     }
 
@@ -14,22 +13,20 @@ final class BackgroundRefreshCache<Key: Hashable, Value> {
     private let now: () -> TimeInterval
     private let refreshInterval: TimeInterval
     private let maximumAge: TimeInterval
-    private let retryDelay: TimeInterval
     private var entries: [Key: Entry] = [:]
     // Set and invoked on the main queue.
     var onRefresh: (() -> Void)?
+    private var notificationPending = false
 
     init(
         queue: DispatchQueue,
         refreshInterval: TimeInterval = 0.5,
         maximumAge: TimeInterval = 5,
-        retryDelay: TimeInterval = AccessibilityQueryBudget.retryDelay,
         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.queue = queue
         self.refreshInterval = refreshInterval
         self.maximumAge = maximumAge
-        self.retryDelay = retryDelay
         self.now = now
     }
 
@@ -44,7 +41,7 @@ final class BackgroundRefreshCache<Key: Hashable, Value> {
         lock.lock()
         var entry = entries[key] ?? Entry()
         let time = now()
-        guard entry.requestID == nil, time >= entry.retryAfter,
+        guard entry.requestID == nil,
               entry.value == nil || time - entry.updatedAt >= refreshInterval
         else {
             lock.unlock()
@@ -67,15 +64,22 @@ final class BackgroundRefreshCache<Key: Hashable, Value> {
             if let value {
                 entry.value = value
                 entry.updatedAt = self.now()
-                entry.retryAfter = 0
-            } else {
-                entry.retryAfter = self.now() + self.retryDelay
             }
             self.entries[key] = entry
             self.lock.unlock()
             if value != nil {
-                DispatchQueue.main.async { [weak self] in self?.onRefresh?() }
+                DispatchQueue.main.async { [weak self] in self?.scheduleNotification() }
             }
+        }
+    }
+
+    private func scheduleNotification() {
+        guard !notificationPending else { return }
+        notificationPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            self.notificationPending = false
+            self.onRefresh?()
         }
     }
 

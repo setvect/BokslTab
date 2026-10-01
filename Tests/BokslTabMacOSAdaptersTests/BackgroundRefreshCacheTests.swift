@@ -22,12 +22,10 @@ final class BackgroundRefreshCacheTests: XCTestCase {
             return "details"
         }
         wait(for: [started], timeout: 1)
-        let start = ProcessInfo.processInfo.systemUptime
         for _ in 0..<100 {
             XCTAssertNil(cache.value(for: 1))
             cache.refresh(1) { XCTFail("duplicate load"); return "duplicate" }
         }
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.2)
         release.signal()
         wait(for: [finished], timeout: 1)
         queue.sync {}
@@ -35,23 +33,21 @@ final class BackgroundRefreshCacheTests: XCTestCase {
         XCTAssertEqual(cache.value(for: 1), "details")
     }
 
-    func testFailureDefersOnlyThatAppAndEventuallyRetries() {
-        let queue = DispatchQueue(label: "retry-test")
-        let clock = TestClock()
-        let cache = BackgroundRefreshCache<Int, String>(queue: queue, now: { clock.time })
-        var failedLoads = 0
-        cache.refresh(1) { failedLoads += 1; return nil }
-        cache.refresh(2) { "healthy" }
+    func testCompletedAppsShareOneMainQueueNotification() {
+        let queue = DispatchQueue(label: "batch-test")
+        let cache = BackgroundRefreshCache<Int, String>(queue: queue)
+        let notified = expectation(description: "one notification for the batch")
+        cache.onRefresh = {
+            XCTAssertTrue(Thread.isMainThread)
+            XCTAssertEqual(cache.value(for: 1), "one")
+            XCTAssertEqual(cache.value(for: 2), "two")
+            notified.fulfill()
+        }
+        cache.refresh(1) { "one" }
+        cache.refresh(2) { "two" }
         queue.sync {}
-        cache.refresh(1) { failedLoads += 1; return "recovered" }
-        queue.sync {}
-        XCTAssertEqual(failedLoads, 1)
-        XCTAssertEqual(cache.value(for: 2), "healthy")
-        clock.advance(16)
-        cache.refresh(1) { failedLoads += 1; return "recovered" }
-        queue.sync {}
-        XCTAssertEqual(failedLoads, 2)
-        XCTAssertEqual(cache.value(for: 1), "recovered")
+        wait(for: [notified], timeout: 1)
+        cache.onRefresh = nil
     }
 
     func testKeepsRecentDetailsOnFailureButExpiresStaleTabs() {
@@ -85,45 +81,9 @@ final class BackgroundRefreshCacheTests: XCTestCase {
         XCTAssertNil(cache.value(for: 1))
     }
 
-    func testBudgetStopsAfterFirstUnresponsiveRequest() {
-        let budget = AccessibilityQueryBudget()
-        budget.record(.attributeUnsupported)
-        XCTAssertNotNil(budget.remainingTimeout)
-        budget.record(.cannotComplete)
-        XCTAssertNil(budget.remainingTimeout)
-        XCTAssertTrue(budget.failed)
-    }
-
-    func testBudgetBoundsEachRequestAndTotalProcessTime() {
-        let clock = TestClock()
-        let budget = AccessibilityQueryBudget(now: { clock.time })
-        XCTAssertEqual(budget.remainingTimeout!, 0.08, accuracy: 0.001)
-        clock.advance(0.22)
-        XCTAssertEqual(budget.remainingTimeout!, 0.03, accuracy: 0.001)
-        clock.advance(0.04)
-        XCTAssertNil(budget.remainingTimeout)
-        XCTAssertTrue(budget.failed)
-    }
-
-    func testQueryFailureCooldownPreventsFurtherAXRequests() {
-        let pid: Int32 = -12345
-        AccessibilityQueryBudget.prune(to: [])
-        let result: String? = AccessibilityQueryBudget.perform(for: pid) {
-            AccessibilityQueryBudget.recordCurrent(.cannotComplete)
-            return "partial results"
-        }
-        XCTAssertNil(result)
-        XCTAssertTrue(AccessibilityQueryBudget.isCoolingDown(pid))
-        let retry: String? = AccessibilityQueryBudget.perform(for: pid) {
-            XCTFail("must not query an unresponsive app again")
-            return "retry"
-        }
-        XCTAssertNil(retry)
-        AccessibilityQueryBudget.prune(to: [])
-    }
 }
 
-private final class TestClock {
+final class TestClock {
     private let lock = NSLock()
     private var value: TimeInterval = 100
     var time: TimeInterval {

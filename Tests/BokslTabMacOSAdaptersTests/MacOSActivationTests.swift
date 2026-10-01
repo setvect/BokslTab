@@ -1,121 +1,120 @@
+import ApplicationServices
 import BokslTabCore
 @testable import BokslTabMacOSAdapters
 import XCTest
 
 final class MacOSActivationTests: XCTestCase {
-    func testTabActivationSelectsOnlyWhenParentIsAlreadyMain() {
+    func testTabActivationPlanPreservesAlreadyMainParent() {
         XCTAssertEqual(AXTabActivationPlan.resolve(parentIsMain: true), .selectOnly)
-    }
-
-    func testTabActivationFocusesParentBeforeSelectionWhenAnotherWindowIsMain() {
         XCTAssertEqual(AXTabActivationPlan.resolve(parentIsMain: false), .focusParentThenSelect)
     }
 
-    func testCachedWindowFallbackReopensAppWhenTargetWindowCannotBeMatched() {
-        let app = AppIdentity(
-            processIdentifier: 999_001,
-            bundleIdentifier: "com.apple.iCal",
-            localizedName: "캘린더",
-            processName: "Calendar"
-        )
-        let closedWindow = WindowIdentity(
-            windowID: SyntheticWindowID.cached(
-                processIdentifier: app.processIdentifier,
-                title: "캘린더",
-                frame: .init(x: 0, y: 0, width: 800, height: 600),
-                index: 0
-            ),
-            ownerProcessIdentifier: app.processIdentifier,
-            title: "캘린더",
-            source: .cached
-        )
-        let appActivator = RecordingAppActivator(result: .appActivationSuccess)
-        let windowActivator = MacOSWindowActivator(
-            appActivator: appActivator,
-            isAccessibilityTrusted: { true }
-        )
-
-        let result = windowActivator.activate(window: closedWindow, app: app)
-
-        XCTAssertEqual(result, .limitedAppFallbackSuccess)
-        XCTAssertEqual(appActivator.activations.map(\.app), [app])
-        XCTAssertEqual(appActivator.activations.map(\.intent), [.reopenIfNeeded])
-    }
-
-    func testUnresponsiveAppUsesAppActivationWithoutAnotherWindowQuery() {
+    @MainActor
+    func testUnresponsiveAppFallsBackAndSkipsSubsequentAXQueries() async {
         let app = AppIdentity(processIdentifier: 999_105, localizedName: "Unresponsive")
-        let _: Void? = AccessibilityQueryBudget.perform(for: app.processIdentifier) {
-            AccessibilityQueryBudget.recordCurrent(.cannotComplete)
+        let recorder = RecordingAppActivator()
+        var reads = 0
+        var api = testAccessibilityAPI()
+        api.copyAttribute = { _, _, _ in
+            XCTAssertFalse(Thread.isMainThread)
+            reads += 1
+            return .cannotComplete
         }
-        defer { AccessibilityQueryBudget.prune(to: []) }
-        let appActivator = RecordingAppActivator(result: .appActivationSuccess)
-        let activator = MacOSWindowActivator(appActivator: appActivator, isAccessibilityTrusted: { true })
-        let start = ProcessInfo.processInfo.systemUptime
-        let result = activator.activate(
-            window: WindowIdentity(windowID: 42, ownerProcessIdentifier: app.processIdentifier),
-            app: app
-        )
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.2)
-        XCTAssertEqual(result, .limitedAppFallbackSuccess)
-        XCTAssertEqual(appActivator.activations.map(\.intent), [.focusOnly])
+        let accessibility = MacOSAccessibilityService(api: api)
+        let activator = MacOSWindowActivator(appActivator: recorder, isAccessibilityTrusted: { true }, accessibility: accessibility)
+        let window = WindowIdentity(windowID: 42, ownerProcessIdentifier: app.processIdentifier, title: "Target")
+        let first = await activator.activate(window: window, app: app)
+        let second = await activator.activate(window: window, app: app)
+        XCTAssertEqual(first, .limitedAppFallbackSuccess)
+        XCTAssertEqual(second, .limitedAppFallbackSuccess)
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(recorder.intents, [.focusOnly, .focusOnly])
     }
 
-    func testAccessibilityDeniedFallbackOnlyFocusesApp() {
-        let app = AppIdentity(processIdentifier: 999_002, localizedName: "테스트 앱")
-        let window = WindowIdentity(
-            windowID: 42,
-            ownerProcessIdentifier: app.processIdentifier,
-            title: "테스트 창"
-        )
-        let appActivator = RecordingAppActivator(result: .appActivationSuccess)
-        let windowActivator = MacOSWindowActivator(
-            appActivator: appActivator,
-            isAccessibilityTrusted: { false }
-        )
-
-        let result = windowActivator.activate(window: window, app: app)
-
+    @MainActor
+    func testDeniedPermissionDoesNotQueryAX() async {
+        var api = testAccessibilityAPI()
+        api.copyAttribute = { _, _, _ in XCTFail("Permission denied"); return .failure }
+        let recorder = RecordingAppActivator()
+        let activator = MacOSWindowActivator(appActivator: recorder, isAccessibilityTrusted: { false }, accessibility: MacOSAccessibilityService(api: api))
+        let result = await activator.activate(window: WindowIdentity(windowID: 42, ownerProcessIdentifier: 123), app: AppIdentity(processIdentifier: 123))
         XCTAssertEqual(result, .limitedAppFallbackSuccess)
-        XCTAssertEqual(appActivator.activations.map(\.app), [app])
-        XCTAssertEqual(appActivator.activations.map(\.intent), [.focusOnly])
+        XCTAssertEqual(recorder.intents, [.focusOnly])
     }
 
-    func testNativeHighBitWindowIDFallbackOnlyFocusesApp() {
-        let app = AppIdentity(processIdentifier: 999_003, localizedName: "테스트 앱")
-        let nativeWindow = WindowIdentity(
-            windowID: 0x4000_0001,
-            ownerProcessIdentifier: app.processIdentifier,
-            title: "네이티브 창"
-        )
-        let appActivator = RecordingAppActivator(result: .appActivationSuccess)
-        let windowActivator = MacOSWindowActivator(
-            appActivator: appActivator,
-            isAccessibilityTrusted: { true }
-        )
+    @MainActor
+    func testDiscoveryAndActionsRunOffMainWithSeparateTimeouts() async {
+        let element = AXUIElementCreateApplication(999_001)
+        var api = testAccessibilityAPI()
+        var timeouts: [Float] = []
+        var actions: [String] = []
+        api.setTimeout = { _, timeout in
+            XCTAssertFalse(Thread.isMainThread)
+            if timeout > 0 { timeouts.append(timeout) }
+            return .success
+        }
+        api.copyAttribute = { _, attribute, output in
+            XCTAssertFalse(Thread.isMainThread)
+            switch attribute as String {
+            case kAXWindowsAttribute: output.pointee = [element] as CFArray
+            case kAXTitleAttribute: output.pointee = "Target" as CFString
+            default: return .attributeUnsupported
+            }
+            return .success
+        }
+        api.performAction = { _, action in
+            XCTAssertFalse(Thread.isMainThread)
+            actions.append(action as String)
+            return .success
+        }
+        let recorder = RecordingAppActivator()
+        let activator = MacOSWindowActivator(appActivator: recorder, isAccessibilityTrusted: { true }, accessibility: MacOSAccessibilityService(api: api))
+        let result = await activator.activate(window: WindowIdentity(windowID: 42, ownerProcessIdentifier: 123, title: "Target"), app: AppIdentity(processIdentifier: 123))
+        XCTAssertEqual(result, .exactWindowSuccess)
+        XCTAssertEqual(actions, [kAXRaiseAction])
+        XCTAssertTrue(timeouts.prefix(2).allSatisfy { $0 > 0 && $0 <= 0.08 })
+        XCTAssertTrue(timeouts.dropFirst(2).allSatisfy { $0 > 0 && $0 <= 0.25 })
+        XCTAssertEqual(recorder.intents, [.focusOnly])
+    }
 
-        let result = windowActivator.activate(window: nativeWindow, app: app)
-
-        XCTAssertEqual(result, .limitedAppFallbackSuccess)
-        XCTAssertEqual(appActivator.activations.map(\.app), [app])
-        XCTAssertEqual(appActivator.activations.map(\.intent), [.focusOnly])
+    @MainActor
+    func testCancelledDiscoveryCannotStealFocusWhenItEventuallyReturns() async {
+        let started = expectation(description: "AX lookup started")
+        let release = DispatchSemaphore(value: 0)
+        var api = testAccessibilityAPI()
+        api.copyAttribute = { _, _, _ in
+            XCTAssertFalse(Thread.isMainThread)
+            started.fulfill()
+            _ = release.wait(timeout: .now() + 2)
+            return .attributeUnsupported
+        }
+        let recorder = RecordingAppActivator()
+        let activator = MacOSWindowActivator(appActivator: recorder, isAccessibilityTrusted: { true }, accessibility: MacOSAccessibilityService(api: api))
+        let task = Task { await activator.activate(window: WindowIdentity(windowID: 42, ownerProcessIdentifier: 123), app: AppIdentity(processIdentifier: 123)) }
+        await fulfillment(of: [started], timeout: 1)
+        // This main-actor continuation runs while the AX worker is still blocked.
+        task.cancel()
+        release.signal()
+        let result = await task.value
+        guard case .safeFailure = result else { return XCTFail("Cancelled activation must not succeed") }
+        XCTAssertTrue(recorder.intents.isEmpty)
     }
 }
 
 private final class RecordingAppActivator: AppActivating {
-    struct Activation: Equatable {
-        let app: AppIdentity
-        let intent: AppActivationIntent
-    }
-
-    private let result: SwitchResult
-    private(set) var activations: [Activation] = []
-
-    init(result: SwitchResult) {
-        self.result = result
-    }
-
+    private(set) var intents: [AppActivationIntent] = []
     func activate(app: AppIdentity, intent: AppActivationIntent) -> SwitchResult {
-        activations.append(Activation(app: app, intent: intent))
-        return result
+        XCTAssertTrue(Thread.isMainThread)
+        intents.append(intent)
+        return .appActivationSuccess
     }
+}
+
+func testAccessibilityAPI() -> AccessibilityAPI {
+    AccessibilityAPI(
+        setTimeout: { _, _ in .success },
+        copyAttribute: { _, _, _ in .attributeUnsupported },
+        setAttribute: { _, _, _ in .success },
+        performAction: { _, _ in .success }
+    )
 }

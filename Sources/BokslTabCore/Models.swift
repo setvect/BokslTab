@@ -83,7 +83,6 @@ public enum WindowIdentitySource: String, Hashable, Sendable {
     case coreGraphics
     case accessibilityOnly
     case accessibilityEvent
-    case cached
 }
 
 public struct WindowIdentity: Hashable, Sendable {
@@ -161,15 +160,6 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
         }
     }
 
-    public var subtitle: String? {
-        switch kind {
-        case .app:
-            return nil
-        case .window:
-            return app.displayName == title ? nil : app.displayName
-        }
-    }
-
     public var isWindow: Bool {
         if case .window = kind { return true }
         return false
@@ -202,7 +192,6 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
             return projectedIDs
         }
     }
-
 
     public static func stableTitleAliasID(ownerProcessIdentifier: Int32, title: String) -> String? {
         guard let stableTitle = StableWindowTitleKey.normalized(title).nonBlank else { return nil }

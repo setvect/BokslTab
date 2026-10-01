@@ -19,7 +19,6 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertEqual(state.selectedItem?.title, "B")
     }
 
-
     func testSelectClampsToAvailableItems() {
         let app = AppIdentity(processIdentifier: 1, localizedName: "App")
         let items = [
@@ -40,7 +39,6 @@ final class SwitcherStateTests: XCTestCase {
         let item = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 10, ownerProcessIdentifier: 1, title: "   ")))
 
         XCTAssertEqual(item.title, "FallbackApp 창 10")
-        XCTAssertEqual(item.subtitle, "FallbackApp")
     }
 
     func testAllAppsAndWindowsComposesOnlyWindowBackedItems() {
@@ -301,7 +299,6 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertEqual(SwitchResult.appActivationSuccess, .appActivationSuccess)
     }
 
-
     func testTabWindowItemUsesStableTabIDAndParentMRUAliases() {
         let app = AppIdentity(processIdentifier: 7, localizedName: "IDE")
         let tab = WindowTabIdentity(parentWindowID: 42, index: 2, title: "Project C", isSelected: true)
@@ -317,8 +314,6 @@ final class SwitcherStateTests: XCTestCase {
             ["tab:42:7:2", "stable-title:7:project c", "window:42:7", "app:7"]
         )
     }
-
-
 
     func testTabIdentityHashIgnoresSelectedSnapshotState() {
         let selected = WindowTabIdentity(

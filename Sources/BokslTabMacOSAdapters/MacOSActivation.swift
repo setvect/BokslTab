@@ -80,130 +80,90 @@ public final class MacOSAppActivator: AppActivating {
 public final class MacOSWindowActivator: WindowActivating {
     private let appActivator: AppActivating
     private let isAccessibilityTrusted: () -> Bool
+    private let accessibility: MacOSAccessibilityService
 
     public init(
         appActivator: AppActivating = MacOSAppActivator(options: []),
-        isAccessibilityTrusted: @escaping () -> Bool = AXIsProcessTrusted
+        isAccessibilityTrusted: @escaping () -> Bool = AXIsProcessTrusted,
+        accessibility: MacOSAccessibilityService = MacOSAccessibilityService()
     ) {
         self.appActivator = appActivator
         self.isAccessibilityTrusted = isAccessibilityTrusted
+        self.accessibility = accessibility
+        _ = accessibility.eventCache
     }
 
-    public func activate(window: WindowIdentity, app: AppIdentity) -> SwitchResult {
+    private enum Target {
+        case window(AXUIElement)
+        case tab(AXWindowTabMatch, AXTabActivationPlan)
+    }
+
+    @MainActor
+    public func activate(window: WindowIdentity, app: AppIdentity) async -> SwitchResult {
+        guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
         guard isAccessibilityTrusted() else {
             return fallbackToApp(app: app, intent: .focusOnly, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
         }
-
-        if AccessibilityQueryBudget.isCoolingDown(app.processIdentifier) {
-            return fallbackToApp(
-                app: app,
-                intent: .focusOnly,
-                reason: "창 정보 조회에 응답하지 않는 앱이라 앱 활성화로 대체했습니다."
-            )
+        let target: Target? = await accessibility.run(for: app.processIdentifier) { query in
+            if window.tab != nil {
+                guard let match = self.findAXWindowAndTab(matching: window, app: app, query: query) else { return nil }
+                let plan = AXTabActivationPlan.resolve(
+                    parentIsMain: query.reader.bool(from: match.window, attribute: kAXMainAttribute)
+                )
+                return .tab(match, plan)
+            }
+            guard let element = self.findExactlyMatchedAXWindow(matching: window, app: app, query: query)
+                ?? self.findCachedAXWindow(matching: window, app: app)
+            else { return nil }
+            return .window(element)
         }
-
-        if window.tab != nil {
-            return activateTab(window: window, app: app)
-        }
-
-        guard let axWindow = findExactlyMatchedAXWindow(matching: window, app: app)
-            ?? findCachedAXWindow(matching: window, app: app)
-        else {
-            return fallbackToApp(
-                app: app,
-                intent: fallbackIntent(for: window),
-                reason: "대상 창을 정확히 식별하지 못해 앱 활성화로 대체했습니다."
-            )
+        guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
+        guard let target else {
+            return fallbackToApp(app: app, intent: .focusOnly, reason: "대상 창 조회가 지연되거나 정확히 식별되지 않아 앱 활성화로 대체했습니다.")
         }
 
         _ = appActivator.activate(app: app)
-        let raiseError = focusAndRaise(axWindow)
-
-        if raiseError == .success {
-            return .exactWindowSuccess
+        // Actions get more time than discovery, but neither can wait on the UI thread.
+        let result: SwitchResult? = await accessibility.run(
+            for: app.processIdentifier, duration: 1, requestTimeout: 0.25
+        ) { query in
+            self.performActivation(target, query: query)
         }
-        return fallbackToApp(app: app, intent: .focusOnly, reason: "창 올리기 액션이 실패해 앱 활성화로 대체했습니다: \(raiseError.rawValue)")
+        guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
+        return result ?? fallbackToApp(app: app, intent: .focusOnly, reason: "창 활성화가 지연되어 앱 활성화로 대체했습니다.")
     }
 
-    private func activateTab(window: WindowIdentity, app: AppIdentity) -> SwitchResult {
-        guard let targetTab = window.tab else {
-            return fallbackToApp(app: app, intent: .focusOnly, reason: "탭 메타데이터가 없어 앱 활성화로 대체했습니다.")
-        }
-
-        BokslTabDiagnosticLog.write(
-            "window-activation.ax.tab.start pid=\(app.processIdentifier) parentWindow=\(targetTab.parentWindowID) index=\(targetTab.index) titleLength=\(targetTab.title.count) parentTitleKnown=\(targetTab.parentTitle?.nonBlankForAdapter != nil) parentFrameKnown=\(targetTab.parentFrame != nil)"
-        )
-
-        guard let match = findAXWindowAndTab(matching: window, app: app) else {
-            BokslTabDiagnosticLog.write(
-                "window-activation.ax.tab.match result=missing pid=\(app.processIdentifier) parentWindow=\(targetTab.parentWindowID) index=\(targetTab.index)"
-            )
-            return fallbackToApp(app: app, intent: .focusOnly, reason: "대상 탭을 식별하지 못해 앱 활성화로 대체했습니다.")
-        }
-
-        BokslTabDiagnosticLog.write(
-            "window-activation.ax.tab.match result=\(match.matchDescription) pid=\(app.processIdentifier) parentWindow=\(targetTab.parentWindowID) index=\(targetTab.index)"
-        )
-
-        let activationPlan = AXTabActivationPlan.resolve(
-            parentIsMain: AXElementReader.bool(from: match.window, attribute: kAXMainAttribute)
-        )
-        BokslTabDiagnosticLog.write(
-            "window-activation.ax.tab.parent-focus plan=\(activationPlan.logDescription)"
-        )
-
-        _ = appActivator.activate(app: app)
-        let preselectionRaiseError: AXError?
-        switch activationPlan {
-        case .selectOnly:
-            preselectionRaiseError = nil
-        case .focusParentThenSelect:
-            preselectionRaiseError = focusAndRaise(match.window)
-            BokslTabDiagnosticLog.write(
-                "window-activation.ax.tab.parent-focus action=focus-raise result=\(preselectionRaiseError?.rawValue ?? AXError.failure.rawValue)"
-            )
-        }
-
-        let selection = select(tab: match.tab.element)
-        BokslTabDiagnosticLog.write(
-            "window-activation.ax.tab.select method=\(selection.method) result=\(selection.success ? "success" : "failed") error=\(selection.errorCode.map(String.init) ?? "nil")"
-        )
-
-        if selection.success {
-            guard preselectionRaiseError == nil || preselectionRaiseError == .success else {
-                return .limitedAppFallbackSuccess
+    private func performActivation(_ target: Target, query: AccessibilityQueryBudget) -> SwitchResult? {
+        switch target {
+        case .window(let window):
+            return focusAndRaise(window, query: query) == .success ? .exactWindowSuccess : nil
+        case .tab(let match, let plan):
+            let raiseError = plan == .focusParentThenSelect ? focusAndRaise(match.window, query: query) : nil
+            let selection = select(tab: match.tab.element, query: query)
+            BokslTabDiagnosticLog.write("window-activation.ax.tab.select method=\(selection.method) success=\(selection.success)")
+            if selection.success {
+                return raiseError == nil || raiseError == .success ? .exactWindowSuccess : .limitedAppFallbackSuccess
             }
-            BokslTabDiagnosticLog.write(
-                "window-activation.ax.tab.refocus skipped=true reason=tab-selection-success"
-            )
-            return .exactWindowSuccess
+            return (raiseError ?? focusAndRaise(match.window, query: query)) == .success
+                ? .limitedAppFallbackSuccess : nil
         }
-
-        let raiseError = preselectionRaiseError ?? focusAndRaise(match.window)
-        if raiseError == .success {
-            return .limitedAppFallbackSuccess
-        }
-        return fallbackToApp(
-            app: app,
-            intent: .focusOnly,
-            reason: "탭 선택 또는 창 올리기 액션이 실패해 앱 활성화로 대체했습니다: select=false, raise=\(raiseError.rawValue)"
-        )
     }
 
     private func findAXWindowAndTab(
         matching window: WindowIdentity,
-        app: AppIdentity
+        app: AppIdentity,
+        query: AccessibilityQueryBudget
     ) -> AXWindowTabMatch? {
         guard let targetTab = window.tab else { return nil }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows = axWindows(from: appElement), !windows.isEmpty else { return nil }
-        let parentCandidates = parentCandidateWindows(for: targetTab, windows: windows)
+        guard let windows = axWindows(from: appElement, query: query), !windows.isEmpty else { return nil }
+        let parentCandidates = parentCandidateWindows(for: targetTab, windows: windows, query: query)
         BokslTabDiagnosticLog.write(
             "window-activation.ax.tab.parent strategy=\(parentCandidates.strategy) candidates=\(parentCandidates.windows.count) pid=\(app.processIdentifier) parentWindow=\(targetTab.parentWindowID)"
         )
 
         let matches = parentCandidates.windows.compactMap { candidateWindow -> AXWindowTabMatch? in
-            let tabs = AXTabElementSnapshot.tabs(in: candidateWindow)
+            let tabs = AXTabElementSnapshot.tabs(in: candidateWindow, query: query)
             guard let tabIndex = AXTabMatchPolicy.bestMatchIndex(target: targetTab, candidates: tabs) else {
                 return nil
             }
@@ -220,12 +180,13 @@ public final class MacOSWindowActivator: WindowActivating {
 
     private func parentCandidateWindows(
         for targetTab: WindowTabIdentity,
-        windows: [AXUIElement]
+        windows: [AXUIElement],
+        query: AccessibilityQueryBudget
     ) -> AXParentWindowCandidateResolution<AXUIElement> {
         let resolution = AXParentWindowMatchPolicy.candidateIndices(
             target: targetTab,
-            candidateTitles: windows.map(title(of:)),
-            candidateFrames: windows.map(frame(of:))
+            candidateTitles: windows.map { title(of: $0, query: query) },
+            candidateFrames: windows.map { query.reader.frame(of: $0) }
         )
         return AXParentWindowCandidateResolution(
             windows: resolution.indices.map { windows[$0] },
@@ -233,13 +194,13 @@ public final class MacOSWindowActivator: WindowActivating {
         )
     }
 
-    private func findExactlyMatchedAXWindow(matching window: WindowIdentity, app: AppIdentity) -> AXUIElement? {
+    private func findExactlyMatchedAXWindow(matching window: WindowIdentity, app: AppIdentity, query: AccessibilityQueryBudget) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows = axWindows(from: appElement),
+        guard let windows = axWindows(from: appElement, query: query),
               let targetTitle = window.title?.nonBlankForAdapter
         else { return nil }
 
-        let candidateTitles = windows.map(title(of:))
+        let candidateTitles = windows.map { title(of: $0, query: query) }
         guard let matchedIndex = AXWindowMatchPolicy.uniqueTitleMatchIndex(
             targetTitle: targetTitle,
             candidateTitles: candidateTitles
@@ -249,7 +210,7 @@ public final class MacOSWindowActivator: WindowActivating {
     }
 
     private func findCachedAXWindow(matching window: WindowIdentity, app: AppIdentity) -> AXUIElement? {
-        guard let cachedWindow = AccessibilityWindowEventCache.shared.window(matching: window, app: app) else {
+        guard let cachedWindow = accessibility.eventCache.window(matching: window, app: app) else {
             BokslTabDiagnosticLog.write(
                 "window-activation.ax.event-cache.match result=missing pid=\(app.processIdentifier) window=\(window.windowID) titleKnown=\(window.title?.nonBlankForAdapter != nil)"
             )
@@ -261,20 +222,20 @@ public final class MacOSWindowActivator: WindowActivating {
         return cachedWindow
     }
 
-    private func axWindows(from appElement: AXUIElement) -> [AXUIElement]? {
+    private func axWindows(from appElement: AXUIElement, query: AccessibilityQueryBudget) -> [AXUIElement]? {
         var rawWindows: CFTypeRef?
-        let copyError = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &rawWindows)
+        let copyError = query.copyAttributeValue(appElement, kAXWindowsAttribute as CFString, &rawWindows)
         guard copyError == .success else { return nil }
         return rawWindows as? [AXUIElement]
     }
 
-    private func select(tab: AXUIElement) -> AXTabSelectionResult {
-        let pressError = AXUIElementPerformAction(tab, kAXPressAction as CFString)
+    private func select(tab: AXUIElement, query: AccessibilityQueryBudget) -> AXTabSelectionResult {
+        let pressError = query.performAction(tab, kAXPressAction as CFString)
         if pressError == .success {
             return AXTabSelectionResult(success: true, method: "press", errorCode: nil)
         }
 
-        let selectedError = AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        let selectedError = query.setAttribute(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
         if selectedError == .success {
             return AXTabSelectionResult(success: true, method: "selected-attribute", errorCode: nil)
         }
@@ -282,28 +243,21 @@ public final class MacOSWindowActivator: WindowActivating {
         return AXTabSelectionResult(success: false, method: "fallback", errorCode: selectedError.rawValue)
     }
 
-    private func focusAndRaise(_ axWindow: AXUIElement) -> AXError {
-        _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
-        _ = AXUIElementSetAttributeValue(axWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        return AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
+    private func focusAndRaise(_ axWindow: AXUIElement, query: AccessibilityQueryBudget) -> AXError {
+        _ = query.setAttribute(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
+        _ = query.setAttribute(axWindow, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        return query.performAction(axWindow, kAXRaiseAction as CFString)
     }
 
-    private func title(of window: AXUIElement) -> String? {
+    private func title(of window: AXUIElement, query: AccessibilityQueryBudget) -> String? {
         var rawTitle: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &rawTitle) == .success else {
+        guard query.copyAttributeValue(window, kAXTitleAttribute as CFString, &rawTitle) == .success else {
             return nil
         }
         return rawTitle as? String
     }
 
-    private func frame(of window: AXUIElement) -> CGRect? {
-        AXElementReader.frame(of: window)
-    }
-
-    private func fallbackIntent(for window: WindowIdentity) -> AppActivationIntent {
-        window.source == .cached ? .reopenIfNeeded : .focusOnly
-    }
-
+    @MainActor
     private func fallbackToApp(
         app: AppIdentity,
         intent: AppActivationIntent,
@@ -418,14 +372,14 @@ struct AXTabElementSnapshot {
     let isSelected: Bool
     let element: AXUIElement
 
-    static func tabs(in window: AXUIElement) -> [AXTabElementSnapshot] {
-        let tabElements = AccessibilityTabResolver.resolveElements(in: window).elements
+    static func tabs(in window: AXUIElement, query: AccessibilityQueryBudget) -> [AXTabElementSnapshot] {
+        let tabElements = AccessibilityTabResolver.resolveElements(in: window, query: query).elements
 
         return tabElements.enumerated().map { index, element in
             AXTabElementSnapshot(
                 index: index,
-                title: AccessibilityTabResolver.title(of: element),
-                isSelected: AccessibilityTabResolver.isSelected(element),
+                title: AccessibilityTabResolver.title(of: element, query: query),
+                isSelected: AccessibilityTabResolver.isSelected(element, query: query),
                 element: element
             )
         }

@@ -95,6 +95,12 @@ designated => identifier "dev.boksl.BokslTab"
 tail -f ~/Library/Logs/BokslTab/BokslTab.log
 ```
 
+로그는 별도 큐에서 기록하며 현재 파일과 이전 파일(`BokslTab.log.previous`)을 각각 최대 5MiB로 유지합니다. 창 목록의 상세 진단이 필요하면 BokslTab을 종료한 뒤 다음과 같이 실행합니다.
+
+```bash
+open .build/dev-app/BokslTab.app --args --debug-logging
+```
+
 ### macOS 기본 Cmd+Tab 복구
 
 BokslTab이 비정상 종료되면 macOS 기본 `Command + Tab` 상태가 남아 있을 수 있습니다.
@@ -111,11 +117,11 @@ macOS 권한이나 앱 상태에 따라 창 제목을 가져오지 못할 수 �
 
 기본 macOS 창 목록과 최근 캐시를 먼저 표시하고, 상세 제목과 네이티브 탭 정보는 백그라운드에서 보완합니다. 상세 정보가 도착해도 현재 선택한 창/탭과 기존 항목의 순서는 유지합니다. 선택한 탭이 사라지면 목록 변경을 다음 열기로 미룹니다.
 
-접근성 요청은 건당 최대 80ms, 앱별 조회는 총 250ms를 기준으로 제한합니다. 응답하지 않거나 시간 예산을 초과한 앱은 15초간 재조회를 유예합니다. 기본 창 항목은 유지하고, 상세 캐시는 5초가 지나면 사용하지 않습니다. 유예 중인 앱을 선택하면 상세 창 조회 대신 앱 활성화를 시도합니다. 로그의 `window-catalog.ax.deferred`에 해당 PID와 유예 사유가 남습니다.
+접근성 요청은 건당 최대 80ms, 앱별 조회는 총 250ms를 기준으로 제한합니다. 응답하지 않거나 시간 예산을 초과한 앱은 15초간 재조회를 유예합니다. 기본 창 항목은 유지하고, 상세 캐시는 5초가 지나면 사용하지 않습니다. 유예 중인 앱을 선택하면 상세 창 조회 대신 앱 활성화를 시도합니다. 로그의 `accessibility.deferred`에 해당 PID와 유예 시간이 남습니다. 창 활성화도 백그라운드에서 처리하며 동작 요청은 건당 250ms, 총 1초로 제한합니다.
 
 ### IntelliJ 탭 그룹 확인
 
-IntelliJ에서 여러 프로젝트를 연 뒤 `Window > Merge All Project Windows`를 실행합니다. BokslTab 목록에서 각 프로젝트 탭이 별도 항목으로 보이고 선택 시 해당 탭으로 이동하는지 확인합니다. 지원 앱 allowlist에서 direct `AXTabs` 또는 창 바로 아래의 네이티브 `AXTabGroup`/`AXTabButton`으로 노출되는 macOS 탭을 펼치며, 브라우저 내부 웹 탭은 펼치지 않습니다. 로그에는 `window-catalog.ax.tabs`, `window-activation.ax.tab` 항목이 남습니다.
+IntelliJ에서 여러 프로젝트를 연 뒤 `Window > Merge All Project Windows`를 실행합니다. BokslTab 목록에서 각 프로젝트 탭이 별도 항목으로 보이고 선택 시 해당 탭으로 이동하는지 확인합니다. 지원 앱 allowlist에서 direct `AXTabs` 또는 창 바로 아래의 네이티브 `AXTabGroup`/`AXTabButton`으로 노출되는 macOS 탭을 펼치며, 브라우저 내부 웹 탭은 펼치지 않습니다. 상세 진단은 `--debug-logging` 실행 옵션으로 켤 수 있습니다.
 
 ## 설치 / 배포
 

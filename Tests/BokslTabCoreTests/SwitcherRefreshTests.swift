@@ -17,6 +17,20 @@ final class SwitcherRefreshTests: XCTestCase {
         )))
     }
 
+    func testAppFallbackBecomesFirstWindowOfTheSameApp() {
+        var state = SwitcherState(mode: .activeAppWindows, items: [SwitcherItem(app: app, kind: .app)])
+        XCTAssertTrue(state.mergeRefreshedItems([window(10), window(20)]))
+        XCTAssertEqual(state.items.count, 2)
+        XCTAssertEqual(state.selectedItem?.id, window(10).id)
+    }
+
+    func testAppFallbackDoesNotSelectAnotherApp() {
+        let other = AppIdentity(processIdentifier: 2, localizedName: "Other")
+        var state = SwitcherState(mode: .activeAppWindows, items: [SwitcherItem(app: other, kind: .app)])
+        XCTAssertFalse(state.mergeRefreshedItems([window(10)]))
+        XCTAssertEqual(state.selectedItem?.app, other)
+    }
+
     func testEnrichmentPreservesOrderAndUserSelection() {
         var state = SwitcherState(mode: .allAppsAndWindows, items: [window(10), window(20)], selectedIndex: 1)
         XCTAssertTrue(state.mergeRefreshedItems([window(20, title: "Detailed"), window(10), window(30)]))

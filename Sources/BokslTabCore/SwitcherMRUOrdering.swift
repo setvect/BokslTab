@@ -40,11 +40,6 @@ public protocol SwitcherMRUHistoryRecording: AnyObject {
     func recordActivatedApp(_ app: AppIdentity)
 }
 
-public protocol SwitcherMRUTracking: AnyObject {
-    func startTracking()
-    func stopTracking()
-}
-
 public enum SwitcherMRUOrderer {
     public struct Diagnostics: Equatable, Sendable {
         public let matchedItemCount: Int

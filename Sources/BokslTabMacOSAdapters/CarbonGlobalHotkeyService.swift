@@ -64,12 +64,9 @@ public final class CarbonGlobalHotkeyService: GlobalHotkeyServicing {
         }
 
         if !failures.isEmpty {
-            if hotkeyRefs.isEmpty {
-                BokslTabDiagnosticLog.write("carbon.start failed all registrations failures=\(failures)")
-                stop()
-                if failures.count == 1, let failure = failures.first {
-                    throw HotkeyRegistrationError.registrationFailed(definition: failure.definition, code: failure.code)
-                }
+            stop()
+            if failures.count == 1, let failure = failures.first {
+                throw HotkeyRegistrationError.registrationFailed(definition: failure.definition, code: failure.code)
             }
             BokslTabDiagnosticLog.write("carbon.start partialRegistrationFailed failures=\(failures)")
             throw HotkeyRegistrationError.partialRegistrationFailed(failures: failures)

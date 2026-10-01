@@ -22,11 +22,6 @@ public struct SwitcherState: Equatable, Sendable {
 
     public var isEmpty: Bool { items.isEmpty }
 
-    public mutating func replaceItems(_ newItems: [SwitcherItem]) {
-        items = newItems
-        selectedIndex = newItems.isEmpty ? 0 : min(selectedIndex, newItems.count - 1)
-    }
-
     /// Keep existing rows in place and preserve the activation target when details arrive.
     /// A selected parent window may become its currently selected native tab; an explicit
     /// tab that disappears is never silently replaced by a different tab.
@@ -50,6 +45,11 @@ public struct SwitcherState: Equatable, Sendable {
                 }
             } else if newItems.contains(where: { $0.id == selected.id }) {
                 selectedID = selected.id
+            } else if case .app = selected.kind,
+                      let firstWindow = newItems.first(where: {
+                          $0.app.processIdentifier == selected.app.processIdentifier && $0.isWindow
+                      }) {
+                selectedID = firstWindow.id
             } else if case .window(let window) = selected.kind, window.tab == nil,
                       let selectedTab = newItems.first(where: { item in
                           guard case .window(let candidate) = item.kind else { return false }

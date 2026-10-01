@@ -14,6 +14,7 @@ public protocol WindowCatalogProviding {
 /// Completion notifications are delivered on the main queue; catalog reads remain synchronous and nonblocking.
 public protocol WindowCatalogRefreshing: AnyObject {
     var onDidRefresh: (() -> Void)? { get set }
+    func requestRefresh(including apps: [AppIdentity])
 }
 
 public extension WindowCatalogProviding {
@@ -38,7 +39,7 @@ public extension AppActivating {
 }
 
 public protocol WindowActivating {
-    func activate(window: WindowIdentity, app: AppIdentity) -> SwitchResult
+    @MainActor func activate(window: WindowIdentity, app: AppIdentity) async -> SwitchResult
 }
 
 public protocol PermissionAdvising {
@@ -71,6 +72,7 @@ public struct HotkeyDefinition: Hashable, Sendable {
     }
 }
 
+/// A failed start leaves no registrations active; callers may retry a reduced set.
 public protocol GlobalHotkeyServicing: AnyObject {
     func start(definitions: [HotkeyDefinition], onTrigger: @escaping @Sendable (SwitcherMode) -> Void) throws
     func stop()
