@@ -135,6 +135,9 @@ IntelliJ에서 여러 프로젝트를 연 뒤 `Window > Merge All Project Window
 
 ## 관련 문서
 
+- [소스코드 읽기 안내서](docs/source-code-guide.md) — 처음 읽는 사람을 위한 구조·실행 흐름·파일 지도
+- [그림과 단계별 탐색 자료](docs/source-code-guide.html) — 모듈 선택과 Cmd+Tab 흐름 탐색
+
 - `docs/requirements.md`
 - `docs/prd.md`
 - `docs/architecture.md`

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="440" viewBox="0 0 1000 440" role="img" aria-labelledby="title desc">
+<title id="title">외부 창 정보가 목록 항목과 선택 상태로 바뀌는 과정</title><desc id="desc">CoreGraphics 및 AX 정보는 스냅샷과 창 식별 정보로 변환된다. 앱 정보와 창 식별 정보가 합쳐져 목록의 한 행인 SwitcherItem이 된다. SwitcherState는 항목 배열과 선택 인덱스를 가진다. UI는 이를 표시한다.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#66758b"/></marker></defs>
+<rect width="1000" height="440" rx="20" fill="#f7f9fc"/>
+<g font-family="-apple-system, BlinkMacSystemFont, sans-serif" fill="#182337">
+<text x="30" y="40" font-size="20" font-weight="700">데이터 흐름 · OS 정보가 화면의 한 줄로 바뀝니다</text>
+<g stroke="#cad3e0" stroke-width="1.5"><rect x="30" y="92" width="200" height="90" rx="12" fill="#fff0df"/><rect x="285" y="92" width="200" height="90" rx="12" fill="#eee9fc"/><rect x="545" y="92" width="190" height="90" rx="12" fill="#eee9fc"/><rect x="790" y="92" width="180" height="90" rx="12" fill="#e5f3ef"/><rect x="285" y="245" width="200" height="95" rx="12" fill="#eee9fc"/></g>
+<g text-anchor="middle"><text x="130" y="126" font-size="19" font-weight="700">CG / AX 정보</text><text x="130" y="157" font-size="16">ID·PID·제목·크기</text><text x="385" y="126" font-size="19" font-weight="700">WindowIdentity</text><text x="385" y="157" font-size="16">한 창 / 탭의 정보</text><text x="640" y="126" font-size="19" font-weight="700">SwitcherItem</text><text x="640" y="157" font-size="16">목록의 한 행</text><text x="880" y="126" font-size="19" font-weight="700">SwitcherState</text><text x="880" y="157" font-size="16">항목 배열 + 선택 위치</text><text x="385" y="280" font-size="19" font-weight="700">AppIdentity</text><text x="385" y="310" font-size="16">소유 앱·이름·PID</text></g>
+<g fill="none" stroke="#66758b" stroke-width="2" marker-end="url(#arrow)"><path d="M230 137 H275"/><path d="M485 137 H535"/><path d="M485 285 H640 V192"/><path d="M735 137 H780"/></g>
+<text x="32" y="389" font-size="16">네이티브 탭도 WindowIdentity.tab에 정보를 담아 하나의 목록 항목으로 표시합니다.</text>
+<text x="32" y="418" font-size="16">ID는 대상을 구별하는 값, selectedIndex는 현재 배열에서 선택된 위치입니다.</text>
+</g></svg>

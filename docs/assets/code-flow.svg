@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="910" viewBox="0 0 1000 910" role="img" aria-labelledby="title desc">
+<title id="title">Cmd+Tab의 화면 작업과 백그라운드 작업</title><desc id="desc">메인 쪽은 입력 처리, 기본 목록 표시, 선택 갱신, 패널 닫기와 앱 포커스를 담당한다. 작업 큐는 AX 상세 조회, 선택 대상 식별과 창·탭 동작을 담당한다. 상세 정보는 도착한 경우에만 열린 목록에 병합된다.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#66758b"/></marker></defs>
+<rect width="1000" height="910" fill="#f7f9fc" rx="20"/>
+<g font-family="-apple-system, BlinkMacSystemFont, sans-serif" fill="#182337">
+<text x="30" y="38" font-size="20" font-weight="700">한 번의 전환 · 화면과 AX 작업을 나눕니다</text>
+<text x="235" y="87" text-anchor="middle" font-size="21" font-weight="700">메인 액터 / 화면 쪽</text><text x="765" y="87" text-anchor="middle" font-size="21" font-weight="700">AX 직렬 작업 큐</text>
+<path d="M500 110 V810" stroke="#cad3e0" stroke-width="1.5" stroke-dasharray="5 7"/>
+<g stroke="#cad3e0" stroke-width="1.5">
+<rect x="35" y="120" width="400" height="80" rx="12" fill="#e7eefe"/><rect x="565" y="120" width="400" height="80" rx="12" fill="#fff0df"/>
+<rect x="35" y="240" width="400" height="90" rx="12" fill="#e5f3ef"/><rect x="565" y="240" width="400" height="90" rx="12" fill="#fff0df"/>
+<rect x="35" y="380" width="400" height="80" rx="12" fill="#e5f3ef"/>
+<rect x="35" y="500" width="400" height="80" rx="12" fill="#e7eefe"/><rect x="565" y="500" width="400" height="80" rx="12" fill="#fff0df"/>
+<rect x="35" y="620" width="400" height="80" rx="12" fill="#e7eefe"/><rect x="565" y="620" width="400" height="80" rx="12" fill="#fff0df"/>
+<rect x="35" y="750" width="400" height="60" rx="12" fill="#eee9fc"/>
+</g>
+<g text-anchor="middle" font-size="18"><text x="235" y="151">① 단축키 → Coordinator.show</text><text x="235" y="180" font-size="15">상세 갱신을 예약합니다</text>
+<text x="765" y="151">② AX 상세 조회</text><text x="765" y="180" font-size="15">제목·창·네이티브 탭 정보</text>
+<text x="235" y="270">③ CG 정보 + 기존 캐시로 목록 표시</text><text x="235" y="301" font-size="15">Composer → MRU → State → Panel</text>
+<text x="765" y="270">상세 결과를 캐시에 저장</text><text x="765" y="301" font-size="15">완료 알림을 묶어 메인 쪽에 전달</text>
+<text x="235" y="412">④ 도착한 상세 정보를 목록에 병합</text><text x="235" y="441" font-size="15">패널이 열려 있을 때 / 선택 대상 보존</text>
+<text x="235" y="531">⑤ Command를 떼면 패널 닫기</text><text x="235" y="560" font-size="15">선택한 창의 비동기 활성화 시작</text>
+<text x="765" y="531">⑥ 선택 대상 AX 창·탭 식별</text><text x="765" y="560" font-size="15">조회 지연·식별 실패 → 앱 활성화로 대체</text>
+<text x="235" y="651">⑦ 앱을 앞으로 가져오기</text><text x="235" y="680" font-size="15">AppActivator · AppKit 호출</text>
+<text x="765" y="651">⑧ 창 올리기 / 탭 선택</text><text x="765" y="680" font-size="15">시간 제한을 적용한 AX 동작</text>
+<text x="235" y="786">결과 보고 · 성공한 전환의 MRU 기록</text>
+</g>
+<g fill="none" stroke="#66758b" stroke-width="2" marker-end="url(#arrow)"><path d="M435 160 H555"/><path d="M235 200 V230"/><path d="M765 200 V230"/><path d="M565 325 L445 404" stroke-dasharray="5 5"/><path d="M235 330 V370" stroke-dasharray="5 5"/><path d="M235 460 V490"/><path d="M435 540 H555"/><path d="M565 566 L445 647"/><path d="M435 660 H555"/><path d="M565 689 L445 777"/></g>
+<text x="30" y="851" font-size="16">②와③은 서로의 완료를 기다리지 않습니다. ④는 상세 정보가 늦게 도착하면 생략될 수 있습니다.</text>
+<text x="30" y="881" font-size="16">AX 작업은 앱별 순차 실행이며, 새 전환 요청은 이전 활성화 작업을 취소합니다.</text>
+</g></svg>

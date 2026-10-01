@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="580" viewBox="0 0 1000 580" role="img" aria-labelledby="title desc">
+<title id="title">BokslTab 네 모듈의 의존 관계</title><desc id="desc">App은 UI, MacOSAdapters, Core를 사용한다. UI와 MacOSAdapters는 Core를 사용한다. Core는 다른 세 모듈을 사용하지 않는다. 선은 호출 순서가 아니라 코드 의존성이다.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#66758b"/></marker></defs>
+<rect width="1000" height="580" fill="#f7f9fc" rx="20"/>
+<g font-family="-apple-system, BlinkMacSystemFont, sans-serif" fill="#182337">
+<text x="35" y="38" font-size="19" font-weight="600">코드 의존성 · 화살표가 향하는 모듈을 사용합니다</text>
+<g fill="none" stroke="#66758b" stroke-width="2" marker-end="url(#arrow)">
+<path d="M345 128 H200 V235"/><path d="M655 128 H800 V235"/><path d="M500 177 V422"/>
+<path d="M200 372 V486 H338"/><path d="M800 372 V486 H662"/>
+</g>
+<g stroke="#cad3e0" stroke-width="1.5">
+<rect x="345" y="68" width="310" height="110" rx="14" fill="#e7eefe"/>
+<rect x="40" y="245" width="320" height="126" rx="14" fill="#e5f3ef"/>
+<rect x="640" y="245" width="320" height="126" rx="14" fill="#fff0df"/>
+<rect x="345" y="432" width="310" height="118" rx="14" fill="#eee9fc"/>
+</g>
+<g text-anchor="middle"><text x="500" y="102" font-size="24" font-weight="700">App · 진행 담당</text><text x="500" y="132" font-size="17">부품을 조립하고 전환 흐름을 연결</text><text x="500" y="158" font-size="15">BokslTabApp / SwitcherCoordinator</text>
+<text x="200" y="281" font-size="24" font-weight="700">UI · 화면 담당</text><text x="200" y="312" font-size="17">패널·목록·키보드 입력</text><text x="200" y="342" font-size="15">PanelController / PanelView</text>
+<text x="800" y="281" font-size="24" font-weight="700">MacOSAdapters</text><text x="800" y="312" font-size="17">macOS에서 읽고, macOS에 요청</text><text x="800" y="342" font-size="15">창 조회 / 창 활성화 / 전역 단축키</text>
+<text x="500" y="466" font-size="24" font-weight="700">Core · 규칙 담당</text><text x="500" y="497" font-size="17">항목 모델·선택·정렬·인터페이스</text><text x="500" y="526" font-size="15">macOS 화면이나 AX API를 모름</text></g>
+<text x="510" y="315" font-size="14" fill="#66758b">직접 사용</text>
+</g></svg>
