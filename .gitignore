@@ -5,3 +5,9 @@ DerivedData/
 
 .vscode/
 .idea/
+
+# VS Code SourceKit-LSP 백그라운드 색인이 저장소 루트에 남기는 컴파일러 부산물
+/*.d
+/*.dia
+/*.swiftdeps
+/*.swiftmodule
