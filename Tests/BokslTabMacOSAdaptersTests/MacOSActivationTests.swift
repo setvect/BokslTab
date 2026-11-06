@@ -72,9 +72,81 @@ final class MacOSActivationTests: XCTestCase {
         let result = await activator.activate(window: WindowIdentity(windowID: 42, ownerProcessIdentifier: 123, title: "Target"), app: AppIdentity(processIdentifier: 123))
         XCTAssertEqual(result, .exactWindowSuccess)
         XCTAssertEqual(actions, [kAXRaiseAction])
-        XCTAssertTrue(timeouts.prefix(2).allSatisfy { $0 > 0 && $0 <= 0.08 })
-        XCTAssertTrue(timeouts.dropFirst(2).allSatisfy { $0 > 0 && $0 <= 0.25 })
+        // Discovery: windows, window number, title. Actions: main, focused, raise.
+        XCTAssertEqual(timeouts.count, 6)
+        XCTAssertTrue(timeouts.prefix(3).allSatisfy { $0 > 0 && $0 <= 0.08 })
+        XCTAssertTrue(timeouts.dropFirst(3).allSatisfy { $0 > 0.08 && $0 <= 0.25 })
         XCTAssertEqual(recorder.intents, [.focusOnly])
+    }
+
+    /// Reported at 21:14: the row for Code#95 carried #97's title, and raising by title brought #97 forward.
+    @MainActor
+    func testActivationRaisesTheRowsWindowNumberEvenWhenItsTitleBelongsToASibling() async {
+        let window95 = AXUIElementCreateApplication(999_295)
+        let window97 = AXUIElementCreateApplication(999_297)
+        var api = siblingWindowsAPI(window97: window97, window95: window95)
+        var raised: [Int32] = []
+        api.performAction = { element, action in
+            if action as String == kAXRaiseAction { raised.append(Self.pid(of: element)) }
+            return .success
+        }
+        let recorder = RecordingAppActivator()
+        let activator = MacOSWindowActivator(appActivator: recorder, isAccessibilityTrusted: { true }, accessibility: MacOSAccessibilityService(api: api))
+
+        let result = await activator.activate(
+            window: WindowIdentity(windowID: 95, ownerProcessIdentifier: 661, title: "Alpha — BokslTab"),
+            app: AppIdentity(processIdentifier: 661)
+        )
+
+        XCTAssertEqual(result, .exactWindowSuccess)
+        XCTAssertEqual(raised, [999_295])
+    }
+
+    @MainActor
+    func testActivationDoesNotBorrowAnIdentifiedSiblingByTitleWhenTheWindowIsGone() async {
+        let window95 = AXUIElementCreateApplication(999_295)
+        let window97 = AXUIElementCreateApplication(999_297)
+        var api = siblingWindowsAPI(window97: window97, window95: window95)
+        var raised: [Int32] = []
+        api.performAction = { element, action in
+            if action as String == kAXRaiseAction { raised.append(Self.pid(of: element)) }
+            return .success
+        }
+        let recorder = RecordingAppActivator()
+        let activator = MacOSWindowActivator(appActivator: recorder, isAccessibilityTrusted: { true }, accessibility: MacOSAccessibilityService(api: api))
+
+        let result = await activator.activate(
+            window: WindowIdentity(windowID: 42, ownerProcessIdentifier: 661, title: "Alpha — BokslTab"),
+            app: AppIdentity(processIdentifier: 661)
+        )
+
+        XCTAssertEqual(result, .limitedAppFallbackSuccess)
+        XCTAssertTrue(raised.isEmpty)
+        XCTAssertEqual(recorder.intents, [.focusOnly])
+    }
+
+    /// Two maximized windows of one app, listed front to back: #97 "Alpha", then #95 "Zeta".
+    private func siblingWindowsAPI(window97: AXUIElement, window95: AXUIElement) -> AccessibilityAPI {
+        var api = testAccessibilityAPI()
+        api.copyAttribute = { element, attribute, output in
+            switch attribute as String {
+            case kAXWindowsAttribute: output.pointee = [window97, window95] as CFArray
+            case kAXTitleAttribute: output.pointee = (Self.pid(of: element) == 999_297 ? "Alpha — BokslTab" : "Zeta — BokslDir") as CFString
+            default: return .attributeUnsupported
+            }
+            return .success
+        }
+        api.windowID = { element, windowID in
+            windowID.pointee = Self.pid(of: element) == 999_297 ? 97 : 95
+            return .success
+        }
+        return api
+    }
+
+    private static func pid(of element: AXUIElement) -> Int32 {
+        var pid: pid_t = 0
+        _ = AXUIElementGetPid(element, &pid)
+        return pid
     }
 
     @MainActor

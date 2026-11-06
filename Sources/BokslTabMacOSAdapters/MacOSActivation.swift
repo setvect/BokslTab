@@ -112,7 +112,7 @@ public final class MacOSWindowActivator: WindowActivating {
                 )
                 return .tab(match, plan)
             }
-            guard let element = self.findExactlyMatchedAXWindow(matching: window, app: app, query: query)
+            guard let element = self.findAXWindow(matching: window, app: app, query: query)
                 ?? self.findCachedAXWindow(matching: window, app: app)
             else { return nil }
             return .window(element)
@@ -183,6 +183,13 @@ public final class MacOSWindowActivator: WindowActivating {
         windows: [AXUIElement],
         query: AccessibilityQueryBudget
     ) -> AXParentWindowCandidateResolution<AXUIElement> {
+        if let index = AXWindowMatchPolicy.windowIDMatchIndex(
+            targetWindowID: targetTab.parentWindowID,
+            candidateWindowIDs: windows.map { query.windowID(of: $0) }
+        ) {
+            return AXParentWindowCandidateResolution(windows: [windows[index]], strategy: "window-id")
+        }
+        // Merged IDE windows can be re-created under a new number, so geometry and title still apply.
         let resolution = AXParentWindowMatchPolicy.candidateIndices(
             target: targetTab,
             candidateTitles: windows.map { title(of: $0, query: query) },
@@ -194,19 +201,38 @@ public final class MacOSWindowActivator: WindowActivating {
         )
     }
 
-    private func findExactlyMatchedAXWindow(matching window: WindowIdentity, app: AppIdentity, query: AccessibilityQueryBudget) -> AXUIElement? {
+    /// The row's window number is authoritative: two maximized windows of one app share geometry,
+    /// and a row's title is only as reliable as the catalog's guess when that number was unknown.
+    private func findAXWindow(matching window: WindowIdentity, app: AppIdentity, query: AccessibilityQueryBudget) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows = axWindows(from: appElement, query: query),
-              let targetTitle = window.title?.nonBlankForAdapter
-        else { return nil }
+        guard let windows = axWindows(from: appElement, query: query) else { return nil }
 
-        let candidateTitles = windows.map { title(of: $0, query: query) }
-        guard let matchedIndex = AXWindowMatchPolicy.uniqueTitleMatchIndex(
+        let windowIDs = windows.map { query.windowID(of: $0) }
+        if let matchedIndex = AXWindowMatchPolicy.windowIDMatchIndex(
+            targetWindowID: window.windowID,
+            candidateWindowIDs: windowIDs
+        ) {
+            BokslTabDiagnosticLog.write(
+                "window-activation.target by=window-id pid=\(app.processIdentifier) window=\(window.windowID)"
+            )
+            return windows[matchedIndex]
+        }
+
+        guard let targetTitle = window.title?.nonBlankForAdapter else { return nil }
+        let titleCandidateIndices = AXWindowMatchPolicy.titleCandidateIndices(
+            candidateWindowIDs: windowIDs,
+            targetHasWindowServerID: window.source == .coreGraphics
+        )
+        let candidateTitles = titleCandidateIndices.map { title(of: windows[$0], query: query) }
+        guard let localIndex = AXWindowMatchPolicy.uniqueTitleMatchIndex(
             targetTitle: targetTitle,
             candidateTitles: candidateTitles
         ) else { return nil }
 
-        return windows[matchedIndex]
+        BokslTabDiagnosticLog.write(
+            "window-activation.target by=title pid=\(app.processIdentifier) window=\(window.windowID) candidates=\(titleCandidateIndices.count)/\(windows.count)"
+        )
+        return windows[titleCandidateIndices[localIndex]]
     }
 
     private func findCachedAXWindow(matching window: WindowIdentity, app: AppIdentity) -> AXUIElement? {
@@ -296,6 +322,17 @@ enum AXTabActivationPlan: Equatable {
 }
 
 enum AXWindowMatchPolicy {
+    static func windowIDMatchIndex(targetWindowID: UInt32, candidateWindowIDs: [UInt32?]) -> Int? {
+        candidateWindowIDs.firstIndex { $0 == targetWindowID }
+    }
+
+    /// A window-server row whose number matched nothing must not borrow an identified window by title:
+    /// that window is known to be a different one. Other rows keep title matching across all windows.
+    static func titleCandidateIndices(candidateWindowIDs: [UInt32?], targetHasWindowServerID: Bool) -> [Int] {
+        guard targetHasWindowServerID else { return Array(candidateWindowIDs.indices) }
+        return candidateWindowIDs.indices.filter { candidateWindowIDs[$0] == nil }
+    }
+
     static func uniqueTitleMatchIndex(targetTitle: String, candidateTitles: [String?]) -> Int? {
         guard let normalizedTarget = targetTitle.nonBlankForAdapter else { return nil }
         let matches = candidateTitles.enumerated().filter { _, candidate in

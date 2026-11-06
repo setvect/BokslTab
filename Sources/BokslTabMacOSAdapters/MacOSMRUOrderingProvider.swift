@@ -52,12 +52,13 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
         let historyItemIDs = MRUOrderingDeduplicator.uniqueIDs(
             history.orderedItemIDs().compactMap { projectionIndex.itemID(forProjectedID: $0) }
         )
-        let orderedItemIDs = MRUOrderingDeduplicator.uniqueIDs(historyItemIDs + frontToBackItemIDs)
+        let merged = MRUOrderMerger.merge(frontToBackItemIDs: frontToBackItemIDs, historyItemIDs: historyItemIDs)
+        let orderedItemIDs = merged.orderedItemIDs
         let firstSnapshotID = snapshots.first?.windowID ?? "none"
         let firstSnapshotMatched = snapshots.first
             .flatMap { projectionIndex.itemID(forProjectedID: $0.windowID) } != nil
         BokslTabDiagnosticLog.write(
-            "mru.cg raw=\(infoList.count) snapshots=\(snapshots.count) items=\(items.count) first=\(firstSnapshotID) firstMatched=\(firstSnapshotMatched) frontMatches=\(frontToBackItemIDs.prefix(8).joined(separator: ",")) historyMatches=\(historyItemIDs.prefix(8).joined(separator: ","))"
+            "mru.cg raw=\(infoList.count) snapshots=\(snapshots.count) items=\(items.count) first=\(firstSnapshotID) firstMatched=\(firstSnapshotMatched) frontMatches=\(frontToBackItemIDs.prefix(8).joined(separator: ",")) historyMatches=\(historyItemIDs.prefix(8).joined(separator: ",")) historyOnly=\(merged.historyOnlyItemIDs.count)"
         )
 
         guard !orderedItemIDs.isEmpty else {
@@ -67,7 +68,7 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
         return SwitcherMRUOrderingContext(
             orderedItemIDs: orderedItemIDs,
             currentItemID: frontToBackItemIDs.first ?? historyItemIDs.first,
-            sourceDescription: sourceDescription(historyMatchedItemCount: historyItemIDs.count)
+            sourceDescription: sourceDescription(historyOnlyItemCount: merged.historyOnlyItemIDs.count)
         )
     }
 
@@ -89,10 +90,43 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
         history.record(snapshot.projectedItemIDs)
     }
 
-    private func sourceDescription(historyMatchedItemCount: Int) -> String {
-        historyMatchedItemCount > 1
-            ? "workspace-activation-history+cg-window-list-front-to-back"
+    private func sourceDescription(historyOnlyItemCount: Int) -> String {
+        historyOnlyItemCount > 0
+            ? "cg-window-list-front-to-back+activation-history"
             : "cg-window-list-front-to-back"
+    }
+}
+
+/// The window server's stacking already reflects every focus change, including window switches inside
+/// one app that the activation history never sees, so it alone orders the rows on screen. History only
+/// places rows that are not on screen (hidden apps, inactive tabs): each goes just ahead of the
+/// on-screen row that was used before it, or at the end when nothing on screen is older.
+enum MRUOrderMerger {
+    struct Result: Equatable {
+        let orderedItemIDs: [String]
+        let historyOnlyItemIDs: [String]
+    }
+
+    static func merge(frontToBackItemIDs: [String], historyItemIDs: [String]) -> Result {
+        let onScreenIDs = MRUOrderingDeduplicator.uniqueIDs(frontToBackItemIDs)
+        let onScreenIDSet = Set(onScreenIDs)
+        var offScreenIDsByOlderOnScreenID: [String: [String]] = [:]
+        var pendingOffScreenIDs: [String] = []
+        var historyOnlyIDs: [String] = []
+
+        for id in MRUOrderingDeduplicator.uniqueIDs(historyItemIDs) {
+            guard onScreenIDSet.contains(id) else {
+                pendingOffScreenIDs.append(id)
+                historyOnlyIDs.append(id)
+                continue
+            }
+            offScreenIDsByOlderOnScreenID[id] = pendingOffScreenIDs
+            pendingOffScreenIDs.removeAll()
+        }
+
+        let orderedIDs = onScreenIDs.flatMap { (offScreenIDsByOlderOnScreenID[$0] ?? []) + [$0] }
+            + pendingOffScreenIDs
+        return Result(orderedItemIDs: orderedIDs, historyOnlyItemIDs: historyOnlyIDs)
     }
 }
 

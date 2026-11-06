@@ -50,11 +50,13 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
-    func testProviderUsesActivationHistoryBeforeCoreGraphicsFallbackOrder() {
+    func testProviderPrefersWindowStackingOverStaleActivationHistory() {
         let app = AppIdentity(processIdentifier: 10, localizedName: "App")
         let current = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 300, ownerProcessIdentifier: 10, title: "Current")))
-        let previous = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 200, ownerProcessIdentifier: 10, title: "Previous")))
-        let older = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 100, ownerProcessIdentifier: 10, title: "Older")))
+        let previous = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 100, ownerProcessIdentifier: 10, title: "Previous")))
+        let older = SwitcherItem(app: app, kind: .window(WindowIdentity(windowID: 200, ownerProcessIdentifier: 10, title: "Older")))
+        // A click inside the same app reorders windows without any app activation, so history still
+        // lists the older window first.
         let provider = MacOSMRUOrderingProvider(
             windowInfoLister: FakeCGWindowInfoLister(
                 infoList: [
@@ -63,7 +65,7 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
                     windowInfo(windowID: 200, pid: 10)
                 ]
             ),
-            initialRecentItemIDs: [previous.id, older.id]
+            initialRecentItemIDs: [older.id, previous.id]
         )
 
         let context = provider.orderingContext(for: .activeAppWindows, items: [older, previous, current])
@@ -71,9 +73,86 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
 
         XCTAssertEqual(context.orderedItemIDs, [current.id, previous.id, older.id])
         XCTAssertEqual(context.currentItemID, current.id)
-        XCTAssertEqual(context.sourceDescription, "workspace-activation-history+cg-window-list-front-to-back")
+        XCTAssertEqual(context.sourceDescription, "cg-window-list-front-to-back")
         XCTAssertEqual(ordered.map(\.title), ["Current", "Previous", "Older"])
         XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
+    }
+
+    /// Reported at 21:14: Code#97 was third in the window stacking but listed seventh,
+    /// below every Chrome window that the activation history happened to remember.
+    func testProviderListsWindowsMissingFromHistoryAtTheirStackingPosition() {
+        let claude = AppIdentity(processIdentifier: 2766, localizedName: "Claude")
+        let code = AppIdentity(processIdentifier: 661, localizedName: "Code")
+        let chrome = AppIdentity(processIdentifier: 645, localizedName: "Chrome")
+        let frontToBack: [(app: AppIdentity, windowID: UInt32)] = [
+            (claude, 240), (code, 95), (code, 97), (chrome, 689), (chrome, 156), (chrome, 220)
+        ]
+        let stacking = frontToBack.map { row in
+            SwitcherItem(app: row.app, kind: .window(WindowIdentity(
+                windowID: row.windowID,
+                ownerProcessIdentifier: row.app.processIdentifier,
+                title: "\(row.windowID)"
+            )))
+        }
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(
+                infoList: frontToBack.map { windowInfo(windowID: $0.windowID, pid: $0.app.processIdentifier) }
+            ),
+            initialRecentItemIDs: [stacking[0], stacking[1], stacking[3], stacking[5], stacking[4]].map(\.id)
+        )
+        let items = Array(stacking.reversed())
+
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+        let ordered = SwitcherMRUOrderer.order(items: items, context: context)
+
+        XCTAssertEqual(ordered.map(\.id), stacking.map(\.id))
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
+    }
+
+    func testProviderPlacesInactiveTabFromHistoryAheadOfOlderOnScreenWindow() {
+        let ide = AppIdentity(processIdentifier: 10, localizedName: "IDE")
+        let browser = AppIdentity(processIdentifier: 20, localizedName: "Browser")
+        let previousTab = SwitcherItem(
+            app: ide,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: "Project A",
+                tab: WindowTabIdentity(parentWindowID: 300, index: 0, title: "Project A", isSelected: false)
+            ))
+        )
+        let currentTab = SwitcherItem(
+            app: ide,
+            kind: .window(WindowIdentity(
+                windowID: 300,
+                ownerProcessIdentifier: 10,
+                title: "Project B",
+                tab: WindowTabIdentity(parentWindowID: 300, index: 1, title: "Project B", isSelected: true)
+            ))
+        )
+        let browserWindow = SwitcherItem(app: browser, kind: .window(WindowIdentity(windowID: 400, ownerProcessIdentifier: 20, title: "Docs")))
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(infoList: [windowInfo(windowID: 300, pid: 10), windowInfo(windowID: 400, pid: 20)]),
+            initialRecentItemIDs: [previousTab.id, browserWindow.id]
+        )
+
+        let items = [browserWindow, previousTab, currentTab]
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+        let ordered = SwitcherMRUOrderer.order(items: items, context: context)
+
+        XCTAssertEqual(ordered.map(\.id), [currentTab.id, previousTab.id, browserWindow.id])
+        XCTAssertEqual(context.sourceDescription, "cg-window-list-front-to-back+activation-history")
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
+    }
+
+    func testMergerSlotsOffScreenHistoryJustAheadOfTheOnScreenRowUsedBeforeIt() {
+        let result = MRUOrderMerger.merge(
+            frontToBackItemIDs: ["B", "C", "D"],
+            historyItemIDs: ["B", "X", "D", "C", "Y"]
+        )
+
+        XCTAssertEqual(result.orderedItemIDs, ["B", "C", "X", "D", "Y"])
+        XCTAssertEqual(result.historyOnlyItemIDs, ["X", "Y"])
     }
 
 

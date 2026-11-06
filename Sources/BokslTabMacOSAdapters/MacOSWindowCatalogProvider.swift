@@ -205,16 +205,19 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
                         ownerName: enrichedSnapshots[snapshotIndex].ownerName
                     )
                 )
+                let matchKind = axSnapshots[axIndex].windowID == nil ? "geometry" : "window-id"
                 BokslTabDiagnosticLog.debug(
-                    "window-catalog.ax.match cgWindow=\(enrichedSnapshots[snapshotIndex].identity.windowID) pid=\(processIdentifier) axIndex=\(axIndex) title=\(enrichedSnapshots[snapshotIndex].identity.title.catalogDiagnosticValue)"
+                    "window-catalog.ax.match cgWindow=\(enrichedSnapshots[snapshotIndex].identity.windowID) pid=\(processIdentifier) axIndex=\(axIndex) by=\(matchKind) title=\(enrichedSnapshots[snapshotIndex].identity.title.catalogDiagnosticValue)"
                 )
             }
 
             let weakTitleSnapshotIndices = snapshotIndices.filter {
                 WindowTitleFallbackCandidatePolicy.needsAccessibilityFallback(enrichedSnapshots[$0])
             }
+            // An identified AX window that matched nothing is some other window (minimized, another Space).
+            // Only unidentified windows may lend their titles to the remaining weak-titled CG windows.
             let availableTitles = axSnapshots.indices
-                .filter { !usedAXIndices.contains($0) }
+                .filter { !usedAXIndices.contains($0) && axSnapshots[$0].windowID == nil }
                 .compactMap { axSnapshots[$0].title }
             let fallbackAssignments = AXTitleFallbackPolicy.assignUniqueTitles(
                 candidateWindowIDs: weakTitleSnapshotIndices.map { enrichedSnapshots[$0].identity.windowID },

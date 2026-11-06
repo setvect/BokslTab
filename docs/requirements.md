@@ -206,7 +206,7 @@ MVP에서 제외한다.
 | 취소 | `Escape` |
 | 순환 이동 | 리스트 끝에서 다음 이동 시 첫 항목으로, 첫 항목에서 이전 이동 시 마지막 항목으로 이동 |
 | MRU 표시/기본 선택 | `Cmd+Tab`, `Option+Tab` 모두 현재 항목을 첫 번째로 표시하고 직전 사용 앱/창을 기본 선택으로 둔다 |
-| MRU source | MVP는 앱 실행 중 `NSWorkspace` 활성화 이력을 우선 사용하고 CoreGraphics front-to-back 창 목록을 보조 MRU 근사치로 사용한다 |
+| MRU source | 화면에 있는 창은 CoreGraphics front-to-back 창 순서를 기준으로 한다. 앱 실행 중 활성화·선택 이력은 화면에 없는 항목(숨긴 앱의 창, 비활성 탭 등)의 위치를 정하는 데 사용한다 |
 | MRU fallback | 실제 최근 사용 순서를 얻을 수 없거나 일부 항목이 매칭되지 않으면 crash 없이 deterministic 제목순 fallback을 사용한다 |
 
 구현 단계에서 macOS 전역 단축키 처리 라이브러리/API의 제약에 따라 키 조합은 변경될 수 있다. 변경 시 PRD와 구현 계획에 기록한다.
@@ -218,7 +218,8 @@ MVP에서 제외한다.
 - 현재 선택 항목은 파란색 focus ring 또는 유사한 하이라이트로 명확히 구분되어야 한다.
 - 리스트는 AltTab/Windows Alt+Tab에 가까운 최근 사용 순서(MRU)를 우선 사용한다.
 - MRU 정렬 시 현재 앱/창은 첫 번째에 표시하고, 키보드 포커스는 두 번째 항목인 직전 사용 앱/창에 둔다.
-- MVP에서는 앱 실행 중 `NSWorkspace` 활성화 이력을 우선 사용하고 macOS CoreGraphics front-to-back 창 목록을 보조 MRU 근사치로 사용한다. 창이 없는 앱 fallback 항목은 같은 PID의 앱 ID로 매칭한다.
+- 화면에 있는 창은 macOS CoreGraphics front-to-back 창 순서를 MRU 기준으로 사용한다. 같은 앱 안의 창 전환처럼 앱 활성화 이력에 남지 않는 변화도 이 순서에는 반영된다.
+- 앱 실행 중 `NSWorkspace` 활성화 이력과 BokslTab 선택 이력은 화면에 없는 항목의 위치를 정하는 데 사용한다. 창이 없는 앱 fallback 항목은 같은 PID의 앱 ID로 매칭한다.
 - MRU source가 없거나 일부 항목을 매칭할 수 없는 경우 해당 항목은 deterministic fallback(기본 제목순)으로 정렬한다.
 - 리스트가 길 경우 스크롤 또는 제한된 높이 내 표시를 허용한다.
 - 창 썸네일 또는 실행 화면 캡처는 표시하지 않는다.

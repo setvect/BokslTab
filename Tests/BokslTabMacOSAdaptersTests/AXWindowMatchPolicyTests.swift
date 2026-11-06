@@ -119,6 +119,73 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         XCTAssertEqual(matchIndex, 0)
     }
 
+    func testAccessibilityMatchUsesWindowIDWhenSameAppWindowsShareFrame() {
+        let maximized = CGRect(x: 0, y: 30, width: 2560, height: 1410)
+        let cgWindow = WindowSnapshot(
+            identity: WindowIdentity(windowID: 97, ownerProcessIdentifier: 661, title: nil),
+            bounds: maximized,
+            ownerName: "Code"
+        )
+        let candidates = [
+            AccessibilityWindowSnapshot(windowID: 95, title: "Zeta", frame: maximized),
+            AccessibilityWindowSnapshot(windowID: 97, title: "Alpha", frame: maximized)
+        ]
+
+        let matchIndex = AccessibilityWindowMatchPolicy.bestMatchIndex(
+            for: cgWindow,
+            candidates: candidates,
+            candidateIndices: [0, 1]
+        )
+
+        XCTAssertEqual(matchIndex, 1)
+    }
+
+    func testAccessibilityMatchNeverAssignsIdentifiedWindowByGeometry() {
+        let maximized = CGRect(x: 0, y: 30, width: 2560, height: 1410)
+        let cgWindow = WindowSnapshot(
+            identity: WindowIdentity(windowID: 10, ownerProcessIdentifier: 645, title: nil),
+            bounds: maximized,
+            ownerName: "Google Chrome"
+        )
+        let minimizedSibling = AccessibilityWindowSnapshot(windowID: 11, title: "Minimized", frame: maximized)
+
+        let matchIndex = AccessibilityWindowMatchPolicy.bestMatchIndex(
+            for: cgWindow,
+            candidates: [minimizedSibling],
+            candidateIndices: [0]
+        )
+
+        XCTAssertNil(matchIndex)
+    }
+
+    func testWindowIDMatchPrefersNumberAndLimitsTitleFallbackToUnidentifiedWindows() {
+        let candidateWindowIDs: [UInt32?] = [97, nil, 95]
+
+        XCTAssertEqual(AXWindowMatchPolicy.windowIDMatchIndex(targetWindowID: 95, candidateWindowIDs: candidateWindowIDs), 2)
+        XCTAssertNil(AXWindowMatchPolicy.windowIDMatchIndex(targetWindowID: 42, candidateWindowIDs: candidateWindowIDs))
+        XCTAssertEqual(
+            AXWindowMatchPolicy.titleCandidateIndices(candidateWindowIDs: candidateWindowIDs, targetHasWindowServerID: true),
+            [1]
+        )
+        XCTAssertEqual(
+            AXWindowMatchPolicy.titleCandidateIndices(candidateWindowIDs: candidateWindowIDs, targetHasWindowServerID: false),
+            [0, 1, 2]
+        )
+    }
+
+    func testAccessibilitySnapshotDeduplicationKeepsDistinctWindowsSharingTitleAndFrame() {
+        let maximized = CGRect(x: 0, y: 30, width: 2560, height: 1410)
+        let snapshots = AccessibilityWindowSnapshot.deduplicated([
+            AccessibilityWindowSnapshot(windowID: 156, title: "New Tab", frame: maximized),
+            AccessibilityWindowSnapshot(windowID: 220, title: "New Tab", frame: maximized),
+            AccessibilityWindowSnapshot(windowID: 156, title: "New Tab", frame: maximized),
+            AccessibilityWindowSnapshot(title: "Unidentified", frame: maximized),
+            AccessibilityWindowSnapshot(title: "Unidentified", frame: maximized)
+        ])
+
+        XCTAssertEqual(snapshots.map(\.windowID), [156, 220, nil])
+    }
+
     func testUniqueTitleFallbackAssignsRealTitlesToUntitledWindowsDeterministically() {
         let assignments = AXTitleFallbackPolicy.assignUniqueTitles(
             candidateWindowIDs: [613, 77],
@@ -306,6 +373,26 @@ final class AXWindowMatchPolicyTests: XCTestCase {
         XCTAssertEqual(snapshots[0].identity.ownerProcessIdentifier, 42)
         XCTAssertEqual(snapshots[0].identity.title, "I Put Grok Build to the Test - YouTube - Brave")
         XCTAssertGreaterThanOrEqual(snapshots[0].identity.windowID, 0x8000_0000)
+    }
+
+    func testAXOnlyPolicyKeepsRealWindowNumberWhenKnown() {
+        let app = AppIdentity(processIdentifier: 42, localizedName: "Brave Browser")
+
+        let snapshots = AXOnlyWindowCatalogPolicy.snapshotsForAppsWithoutCGWindows(
+            apps: [app],
+            axSnapshotsByPID: [
+                42: [
+                    AccessibilityWindowSnapshot(
+                        windowID: 3141,
+                        title: "Hidden window",
+                        frame: CGRect(x: 0, y: 0, width: 2560, height: 1440)
+                    )
+                ]
+            ]
+        )
+
+        XCTAssertEqual(snapshots.map(\.identity.windowID), [3141])
+        XCTAssertEqual(snapshots.first?.identity.source, .accessibilityOnly)
     }
 
     func testAXOnlyPolicySkipsBlankOrSmallWindows() {

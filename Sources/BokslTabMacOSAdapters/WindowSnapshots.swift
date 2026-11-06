@@ -195,6 +195,9 @@ enum WindowSnapshotParseResult {
 }
 
 struct AccessibilityWindowSnapshot {
+    /// CoreGraphics window number; nil when it could not be read. A known number is the only
+    /// trustworthy link to a CG window, because same-app windows often share title-less geometry.
+    let windowID: UInt32?
     let title: String?
     let frame: CGRect
     let tabs: [AccessibilityTabSnapshot]
@@ -203,6 +206,7 @@ struct AccessibilityWindowSnapshot {
     let tabDurationMs: Int
 
     init(
+        windowID: UInt32? = nil,
         title: String?,
         frame: CGRect,
         tabs: [AccessibilityTabSnapshot] = [],
@@ -210,6 +214,7 @@ struct AccessibilityWindowSnapshot {
         tabSkipReason: String? = nil,
         tabDurationMs: Int = 0
     ) {
+        self.windowID = windowID
         self.title = title?.nonBlankCatalogTitle
         self.frame = frame
         self.tabs = tabs
@@ -221,7 +226,8 @@ struct AccessibilityWindowSnapshot {
     static func deduplicated(_ snapshots: [AccessibilityWindowSnapshot]) -> [AccessibilityWindowSnapshot] {
         var seenKeys = Set<String>()
         return snapshots.filter { snapshot in
-            let key = [
+            // Distinct windows may share title and frame (two maximized "New Tab" windows).
+            let key = snapshot.windowID.map { "id:\($0)" } ?? [
                 snapshot.title?.nonBlankCatalogTitle ?? "",
                 snapshot.frame.catalogDiagnosticDescription
             ].joined(separator: "|")
@@ -231,6 +237,7 @@ struct AccessibilityWindowSnapshot {
 
     init?(window: AXUIElement, resolveTabs: Bool = true, query: AccessibilityQueryBudget) {
         guard let frame = query.reader.frame(of: window) else { return nil }
+        self.windowID = query.windowID(of: window)
         let tabResolution = resolveTabs
             ? AccessibilityTabResolver.resolveTabs(in: window, query: query)
             : AccessibilityTabResolution(
@@ -256,7 +263,7 @@ struct AccessibilityWindowSnapshot {
     }
 
     var diagnosticDescription: String {
-        "title=\(title.catalogDiagnosticValue) frame=\(frame.catalogDiagnosticDescription) tabs=\(tabs.count) tabSource=\(tabSource?.rawValue ?? "missing") tabSkip=\(tabSkipReason ?? "nil")"
+        "windowID=\(windowID.map(String.init) ?? "unknown") title=\(title.catalogDiagnosticValue) frame=\(frame.catalogDiagnosticDescription) tabs=\(tabs.count) tabSource=\(tabSource?.rawValue ?? "missing") tabSkip=\(tabSkipReason ?? "nil")"
     }
 }
 

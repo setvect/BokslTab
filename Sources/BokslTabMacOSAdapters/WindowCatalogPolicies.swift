@@ -10,20 +10,27 @@ struct AccessibilityWindowMatchPolicy {
         candidates: [AccessibilityWindowSnapshot],
         candidateIndices: [Int]
     ) -> Int? {
-        let candidateFrames = candidateIndices.map { candidates[$0].frame }
+        if let exactIndex = candidateIndices.first(where: { candidates[$0].windowID == snapshot.identity.windowID }) {
+            return exactIndex
+        }
+
+        // A candidate with a known number is some other window (minimized, another Space, ...);
+        // geometry may only decide among candidates whose number could not be read.
+        let geometryCandidateIndices = candidateIndices.filter { candidates[$0].windowID == nil }
+        let candidateFrames = geometryCandidateIndices.map { candidates[$0].frame }
 
         if let localIndex = WindowFrameMatchPolicy.bestFrameMatchIndex(
             targetFrame: snapshot.bounds,
             candidateFrames: candidateFrames
         ) {
-            return candidateIndices[localIndex]
+            return geometryCandidateIndices[localIndex]
         }
 
         if let localIndex = WindowFrameMatchPolicy.bestSizeMatchIndex(
             targetFrame: snapshot.bounds,
             candidateFrames: candidateFrames
         ) {
-            return candidateIndices[localIndex]
+            return geometryCandidateIndices[localIndex]
         }
 
         return nil
@@ -147,9 +154,10 @@ struct AXOnlyWindowCatalogPolicy {
                       WindowSnapshot.isReasonableWindowBounds(axSnapshot.frame)
                 else { return nil }
 
+                // The real number keeps the row's ID (and its MRU history) stable across hide/unhide.
                 return WindowSnapshot(
                     identity: WindowIdentity(
-                        windowID: SyntheticWindowID.axOnly(
+                        windowID: axSnapshot.windowID ?? SyntheticWindowID.axOnly(
                             processIdentifier: app.processIdentifier,
                             title: title,
                             frame: axSnapshot.frame,

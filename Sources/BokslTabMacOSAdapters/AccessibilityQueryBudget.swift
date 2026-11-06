@@ -71,6 +71,13 @@ final class AccessibilityQueryBudget {
     func performAction(_ element: AXUIElement, _ action: CFString) -> AXError {
         withTimeout(on: element) { api.performAction(element, action) }
     }
+
+    /// The CoreGraphics window number behind an AX window, or nil when the app or OS cannot tell.
+    func windowID(of element: AXUIElement) -> UInt32? {
+        var windowID: CGWindowID = 0
+        let error = withTimeout(on: element) { api.windowID(element, &windowID) }
+        return error == .success && windowID != 0 ? windowID : nil
+    }
 }
 
 /// The system boundary is replaceable without bypassing timeout/cooldown policy in tests.
@@ -79,11 +86,28 @@ struct AccessibilityAPI {
     var copyAttribute: (AXUIElement, CFString, UnsafeMutablePointer<CFTypeRef?>) -> AXError
     var setAttribute: (AXUIElement, CFString, CFTypeRef) -> AXError
     var performAction: (AXUIElement, CFString) -> AXError
+    var windowID: (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError = { _, _ in .notImplemented }
 
     static let live = AccessibilityAPI(
         setTimeout: AXUIElementSetMessagingTimeout,
         copyAttribute: AXUIElementCopyAttributeValue,
         setAttribute: AXUIElementSetAttributeValue,
-        performAction: AXUIElementPerformAction
+        performAction: AXUIElementPerformAction,
+        windowID: { element, windowID in
+            AXWindowIDLookup.function?(element, windowID) ?? .notImplemented
+        }
     )
+}
+
+/// Same-sized windows of one app cannot be told apart by geometry or title, so identity comes from
+/// HIServices' private `_AXUIElementGetWindow` (also relied on by AltTab and yabai). It is resolved at
+/// runtime: if a future macOS drops it, matching degrades to geometry instead of failing to launch.
+enum AXWindowIDLookup {
+    typealias Function = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+
+    static let function: Function? = {
+        let defaultHandle = UnsafeMutableRawPointer(bitPattern: -2) // RTLD_DEFAULT
+        guard let symbol = dlsym(defaultHandle, "_AXUIElementGetWindow") else { return nil }
+        return unsafeBitCast(symbol, to: Function.self)
+    }()
 }

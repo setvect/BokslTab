@@ -91,6 +91,8 @@ IntelliJ의 한 창에 프로젝트 탭이 세 개 있으면 탭 정보가 들�
 
 기본 CG 정보와 이미 가진 캐시를 먼저 쓰고, AX 상세 조회는 백그라운드에서 처리한다. CG 목록 읽기 자체는 메인 쪽에서 이뤄진다. “모든 OS 호출이 백그라운드”라는 구조는 아니다.
 
+CG 창과 AX 창은 **창 번호**로 연결한다. AX 창의 번호는 비공개 함수 `_AXUIElementGetWindow`로 읽는다. 같은 앱의 최대화 창은 위치·크기가 같아서 번호 없이는 서로 구별할 수 없다. 번호를 읽지 못한 AX 창에만 위치·크기 매칭과 제목 보완을 쓴다.
+
 ### 저장하는 내용이 서로 다르다
 
 | 담당 | 저장하거나 관리하는 것 | 관리 기준 |
@@ -99,7 +101,7 @@ IntelliJ의 한 창에 프로젝트 탭이 세 개 있으면 탭 정보가 들�
 | `WindowTitleCache` | 제목 보완용 최근 창 제목 | 제목이 약한 창에 보완, 기본 최대 64개 앱 |
 | `AccessibilityWindowEventCache` | AX 이벤트로 관찰한 창과 AX 핸들 | 구독한 앱의 최근 창, 앱별 최대 32개 |
 | `MacOSAccessibilityService` | 앱별 재시도 가능 시각 | 응답 실패·시간 소진 시 AX 요청을 15초 유예 |
-| `MacOSMRUOrderingProvider`의 이력 | 최근 사용한 앱·창의 대상 ID | 메모리에 최대 100개, CG 순서와 함께 정렬에 사용 |
+| `MacOSMRUOrderingProvider`의 이력 | 최근 사용한 앱·창의 대상 ID | 메모리에 최대 100개. 화면의 창은 CG 순서로 정렬하고, 이력은 숨긴 앱의 창·비활성 탭처럼 화면에 없는 항목의 자리에만 사용 |
 
 세 캐시 모두에 5초 제한이 있는 것은 아니다. **재시도 유예는 값의 캐시와 별도로, 접근성 서비스 한 곳에서 관리한다.** MRU는 최근 사용 순서를 위한 이력이다.
 
@@ -160,7 +162,7 @@ IntelliJ의 한 창에 프로젝트 탭이 세 개 있으면 탭 정보가 들�
 | [AccessibilityQueryBudget.swift](../Sources/BokslTabMacOSAdapters/AccessibilityQueryBudget.swift) | 개별 조회·동작의 시간 제한과 교체 가능한 AX API |
 | [AXElementReader.swift](../Sources/BokslTabMacOSAdapters/AXElementReader.swift) | AX 값에서 문자열·좌표·크기·요소를 읽는 공통 도구 |
 | [MacOSActivation.swift](../Sources/BokslTabMacOSAdapters/MacOSActivation.swift) | 앱·창·탭 활성화와 정확한 대상 매칭, 실패 시 앱 대체 |
-| [MacOSMRUOrderingProvider.swift](../Sources/BokslTabMacOSAdapters/MacOSMRUOrderingProvider.swift) | 현재 CG 창 순서와 앱 활성화 이력으로 MRU 정보 생성 |
+| [MacOSMRUOrderingProvider.swift](../Sources/BokslTabMacOSAdapters/MacOSMRUOrderingProvider.swift) | 현재 CG 창 순서로 MRU를 만들고, 화면에 없는 항목은 활성화 이력으로 배치 |
 | [PrioritizedGlobalHotkeyService.swift](../Sources/BokslTabMacOSAdapters/PrioritizedGlobalHotkeyService.swift) | 기본 단축키 대체 방식의 우선순위와 실패 시 정리 |
 | [NativeCommandTabHotkeyService.swift](../Sources/BokslTabMacOSAdapters/NativeCommandTabHotkeyService.swift) | macOS 기본 Cmd+Tab 상태 변경·복원 |
 | [CommandTabEventTapHotkeyService.swift](../Sources/BokslTabMacOSAdapters/CommandTabEventTapHotkeyService.swift) | 필요할 때 Cmd+Tab 입력을 가로채는 EventTap 방식 |
@@ -178,7 +180,7 @@ IntelliJ의 한 창에 프로젝트 탭이 세 개 있으면 탭 정보가 들�
 | 목록 위치·표시·닫기 | `SwitcherPanelController` | `SwitcherPanelLayoutTests` |
 | 다음·이전·취소 키 | `SwitcherKeyboardMapper`와 `SwitcherKeyboardAction` | `SwitcherKeyboardMapperTests` |
 | 키를 길게 누를 때 속도 | `SwitcherKeyRepeatTiming` | `SwitcherKeyboardMapperTests`의 반복 동작 테스트 |
-| 목록에 포함할 창·제목 보완 | `MacOSWindowCatalogProvider`와 `WindowCatalogPolicies` | `AXWindowMatchPolicyTests`, `WindowCatalogResponsivenessTests` |
+| 목록에 포함할 창·제목 보완 | `MacOSWindowCatalogProvider`와 `WindowCatalogPolicies` | `AXWindowMatchPolicyTests`, `WindowIdentityMatchingTests`, `WindowCatalogResponsivenessTests` |
 | 네이티브 탭 지원·탭 펼치기 | `WindowTabCatalog` | `WindowTabPolicyTests` |
 | 갱신 후 선택 유지 | `SwitcherState.mergeRefreshedItems` | `SwitcherRefreshTests` |
 | 최근 사용 순서 | Core의 `SwitcherMRUOrderer`, macOS의 MRU 제공자 | `SwitcherStateTests`, `MacOSMRUOrderingProviderTests` |
