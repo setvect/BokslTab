@@ -81,15 +81,31 @@ public final class MacOSWindowActivator: WindowActivating {
     private let appActivator: AppActivating
     private let isAccessibilityTrusted: () -> Bool
     private let accessibility: MacOSAccessibilityService
+    private let windowServer: WindowServerWindowAccess
 
-    public init(
+    public convenience init(
         appActivator: AppActivating = MacOSAppActivator(options: []),
         isAccessibilityTrusted: @escaping () -> Bool = AXIsProcessTrusted,
         accessibility: MacOSAccessibilityService = MacOSAccessibilityService()
     ) {
+        self.init(
+            appActivator: appActivator,
+            isAccessibilityTrusted: isAccessibilityTrusted,
+            accessibility: accessibility,
+            windowServer: .live
+        )
+    }
+
+    init(
+        appActivator: AppActivating,
+        isAccessibilityTrusted: @escaping () -> Bool,
+        accessibility: MacOSAccessibilityService,
+        windowServer: WindowServerWindowAccess
+    ) {
         self.appActivator = appActivator
         self.isAccessibilityTrusted = isAccessibilityTrusted
         self.accessibility = accessibility
+        self.windowServer = windowServer
         _ = accessibility.eventCache
     }
 
@@ -104,6 +120,10 @@ public final class MacOSWindowActivator: WindowActivating {
         guard isAccessibilityTrusted() else {
             return fallbackToApp(app: app, intent: .focusOnly, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
         }
+        // Tabs switch inside their parent window through AX; the window server only focuses whole windows.
+        let placement: WindowServerPlacement = window.tab == nil
+            ? windowServer.placement(of: window.windowID, ownedBy: app.processIdentifier)
+            : .missing
         let target: Target? = await accessibility.run(for: app.processIdentifier) { query in
             if window.tab != nil {
                 guard let match = self.findAXWindowAndTab(matching: window, app: app, query: query) else { return nil }
@@ -118,6 +138,10 @@ public final class MacOSWindowActivator: WindowActivating {
             return .window(element)
         }
         guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
+        if placement == .offScreen,
+           let result = await activateOutsideVisibleSpaces(window: window, app: app, target: target) {
+            return result
+        }
         guard let target else {
             return fallbackToApp(app: app, intent: .focusOnly, reason: "대상 창 조회가 지연되거나 정확히 식별되지 않아 앱 활성화로 대체했습니다.")
         }
@@ -131,6 +155,51 @@ public final class MacOSWindowActivator: WindowActivating {
         }
         guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
         return result ?? fallbackToApp(app: app, intent: .focusOnly, reason: "창 활성화가 지연되어 앱 활성화로 대체했습니다.")
+    }
+
+    /// AX cannot list a window on another desktop or in a full-screen Space, but the window server can
+    /// focus it. macOS reliably follows to that Space only when the owning app raises the window itself,
+    /// so the handle remembered from when the window was visible is raised right after (AltTab's order).
+    /// A minimized window is restored on the way. Returns nil to fall back when the window server refuses.
+    @MainActor
+    private func activateOutsideVisibleSpaces(window: WindowIdentity, app: AppIdentity, target: Target?) async -> SwitchResult? {
+        let focus = windowServer.focus(window.windowID, app.processIdentifier)
+        guard focus == .focused else {
+            BokslTabDiagnosticLog.write(
+                "window-activation.window-server failed pid=\(app.processIdentifier) window=\(window.windowID) result=\(focus)"
+            )
+            return nil
+        }
+        var raise = "no-handle"
+        if case .window(let element) = target {
+            let raised: Bool? = await accessibility.run(
+                for: app.processIdentifier, duration: 1, requestTimeout: 0.25
+            ) { query in
+                _ = query.setAttribute(element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                return self.focusAndRaise(element, query: query) == .success
+            }
+            raise = raised == true ? "raised" : "failed"
+        }
+        BokslTabDiagnosticLog.write(
+            "window-activation.target by=window-server pid=\(app.processIdentifier) window=\(window.windowID) axRaise=\(raise)"
+        )
+        guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
+        logVisibilityAfterSpaceSwitch(window: window, app: app)
+        return .exactWindowSuccess
+    }
+
+    /// The window server accepts a focus request even when macOS stays on the current Space, so whether
+    /// the window really came into view is logged once the Space animation has settled.
+    @MainActor
+    private func logVisibilityAfterSpaceSwitch(window: WindowIdentity, app: AppIdentity) {
+        let windowServer = windowServer
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            let placement = windowServer.placement(of: window.windowID, ownedBy: app.processIdentifier)
+            let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
+            BokslTabDiagnosticLog.write(
+                "window-activation.window-server.verify pid=\(app.processIdentifier) window=\(window.windowID) visible=\(placement == .onScreen) frontmost=\(frontmost)"
+            )
+        }
     }
 
     private func performActivation(_ target: Target, query: AccessibilityQueryBudget) -> SwitchResult? {
@@ -205,9 +274,14 @@ public final class MacOSWindowActivator: WindowActivating {
     /// and a row's title is only as reliable as the catalog's guess when that number was unknown.
     private func findAXWindow(matching window: WindowIdentity, app: AppIdentity, query: AccessibilityQueryBudget) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let windows = axWindows(from: appElement, query: query) else { return nil }
+        // An app whose windows all sit on other Spaces may list none; remembered handles still apply.
+        let windows = axWindows(from: appElement, query: query) ?? []
 
         let windowIDs = windows.map { query.windowID(of: $0) }
+        for (element, windowID) in zip(windows, windowIDs) {
+            guard let windowID else { continue }
+            accessibility.windowElements.record(element, windowID: windowID, processIdentifier: app.processIdentifier)
+        }
         if let matchedIndex = AXWindowMatchPolicy.windowIDMatchIndex(
             targetWindowID: window.windowID,
             candidateWindowIDs: windowIDs
@@ -216,6 +290,9 @@ public final class MacOSWindowActivator: WindowActivating {
                 "window-activation.target by=window-id pid=\(app.processIdentifier) window=\(window.windowID)"
             )
             return windows[matchedIndex]
+        }
+        if let remembered = rememberedAXWindow(matching: window, app: app, query: query) {
+            return remembered
         }
 
         guard let targetTitle = window.title?.nonBlankForAdapter else { return nil }
@@ -233,6 +310,26 @@ public final class MacOSWindowActivator: WindowActivating {
             "window-activation.target by=title pid=\(app.processIdentifier) window=\(window.windowID) candidates=\(titleCandidateIndices.count)/\(windows.count)"
         )
         return windows[titleCandidateIndices[localIndex]]
+    }
+
+    /// AX lists only the current Space; a handle recorded while the window was visible still reaches it
+    /// after the window moved to another desktop or into full screen.
+    private func rememberedAXWindow(matching window: WindowIdentity, app: AppIdentity, query: AccessibilityQueryBudget) -> AXUIElement? {
+        let windows = accessibility.windowElements
+        guard let element = windows.element(windowID: window.windowID, processIdentifier: app.processIdentifier) else {
+            return nil
+        }
+        guard query.windowID(of: element) == window.windowID else {
+            windows.remove(windowID: window.windowID, processIdentifier: app.processIdentifier)
+            BokslTabDiagnosticLog.write(
+                "window-activation.ax.remembered-handle result=stale pid=\(app.processIdentifier) window=\(window.windowID)"
+            )
+            return nil
+        }
+        BokslTabDiagnosticLog.write(
+            "window-activation.ax.remembered-handle result=hit pid=\(app.processIdentifier) window=\(window.windowID)"
+        )
+        return element
     }
 
     private func findCachedAXWindow(matching window: WindowIdentity, app: AppIdentity) -> AXUIElement? {

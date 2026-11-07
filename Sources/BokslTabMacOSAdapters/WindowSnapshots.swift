@@ -200,6 +200,7 @@ struct AccessibilityWindowSnapshot {
     let windowID: UInt32?
     let title: String?
     let frame: CGRect
+    let isMinimized: Bool
     let tabs: [AccessibilityTabSnapshot]
     let tabSource: AccessibilityTabSource?
     let tabSkipReason: String?
@@ -209,6 +210,7 @@ struct AccessibilityWindowSnapshot {
         windowID: UInt32? = nil,
         title: String?,
         frame: CGRect,
+        isMinimized: Bool = false,
         tabs: [AccessibilityTabSnapshot] = [],
         tabSource: AccessibilityTabSource? = nil,
         tabSkipReason: String? = nil,
@@ -216,6 +218,7 @@ struct AccessibilityWindowSnapshot {
     ) {
         self.windowID = windowID
         self.title = title?.nonBlankCatalogTitle
+        self.isMinimized = isMinimized
         self.frame = frame
         self.tabs = tabs
         self.tabSource = tabSource
@@ -238,6 +241,7 @@ struct AccessibilityWindowSnapshot {
     init?(window: AXUIElement, resolveTabs: Bool = true, query: AccessibilityQueryBudget) {
         guard let frame = query.reader.frame(of: window) else { return nil }
         self.windowID = query.windowID(of: window)
+        self.isMinimized = query.reader.bool(from: window, attribute: kAXMinimizedAttribute)
         let tabResolution = resolveTabs
             ? AccessibilityTabResolver.resolveTabs(in: window, query: query)
             : AccessibilityTabResolution(
@@ -263,7 +267,7 @@ struct AccessibilityWindowSnapshot {
     }
 
     var diagnosticDescription: String {
-        "windowID=\(windowID.map(String.init) ?? "unknown") title=\(title.catalogDiagnosticValue) frame=\(frame.catalogDiagnosticDescription) tabs=\(tabs.count) tabSource=\(tabSource?.rawValue ?? "missing") tabSkip=\(tabSkipReason ?? "nil")"
+        "windowID=\(windowID.map(String.init) ?? "unknown") minimized=\(isMinimized) title=\(title.catalogDiagnosticValue) frame=\(frame.catalogDiagnosticDescription) tabs=\(tabs.count) tabSource=\(tabSource?.rawValue ?? "missing") tabSkip=\(tabSkipReason ?? "nil")"
     }
 }
 

@@ -44,7 +44,7 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
 
         let projectionIndex = MRUItemProjectionIndex(items: items)
         let snapshots = infoList.compactMap(MRUWindowSnapshot.init(windowInfo:))
-        recordFrontmostSnapshot(snapshots.first)
+        recordFrontmostSnapshots(snapshots, projectionIndex: projectionIndex)
 
         let frontToBackItemIDs = MRUOrderingDeduplicator.uniqueIDs(
             snapshots.flatMap(\.projectedItemIDs).compactMap { projectionIndex.itemID(forProjectedID: $0) }
@@ -90,6 +90,16 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
         history.record(snapshot.projectedItemIDs)
     }
 
+    /// The topmost window is not always a row: Chrome keeps a toolbar window above a full-screen
+    /// window. The topmost row, the window the user is in, is recorded right behind it; otherwise a
+    /// full-screen window reached without BokslTab would have no history once the user leaves it.
+    private func recordFrontmostSnapshots(_ snapshots: [MRUWindowSnapshot], projectionIndex: MRUItemProjectionIndex) {
+        let topmostRow = snapshots.first { snapshot in
+            snapshot.projectedItemIDs.contains { projectionIndex.itemID(forProjectedID: $0) != nil }
+        }
+        history.record((snapshots.first?.projectedItemIDs ?? []) + (topmostRow?.projectedItemIDs ?? []))
+    }
+
     private func sourceDescription(historyOnlyItemCount: Int) -> String {
         historyOnlyItemCount > 0
             ? "cg-window-list-front-to-back+activation-history"
@@ -99,8 +109,11 @@ public final class MacOSMRUOrderingProvider: SwitcherMRUOrderingProviding, Switc
 
 /// The window server's stacking already reflects every focus change, including window switches inside
 /// one app that the activation history never sees, so it alone orders the rows on screen. History only
-/// places rows that are not on screen (hidden apps, inactive tabs): each goes just ahead of the
-/// on-screen row that was used before it, or at the end when nothing on screen is older.
+/// places rows that are not on screen (other Spaces, full screen, hidden apps, inactive tabs).
+///
+/// Such a row was used after every on-screen row that history lists after it, and after on-screen rows
+/// history never saw. It therefore goes just above the topmost of those rows, or at the end when every
+/// on-screen row is newer.
 enum MRUOrderMerger {
     struct Result: Equatable {
         let orderedItemIDs: [String]
@@ -109,23 +122,28 @@ enum MRUOrderMerger {
 
     static func merge(frontToBackItemIDs: [String], historyItemIDs: [String]) -> Result {
         let onScreenIDs = MRUOrderingDeduplicator.uniqueIDs(frontToBackItemIDs)
-        let onScreenIDSet = Set(onScreenIDs)
-        var offScreenIDsByOlderOnScreenID: [String: [String]] = [:]
-        var pendingOffScreenIDs: [String] = []
+        let stackIndexByID = Dictionary(uniqueKeysWithValues: onScreenIDs.enumerated().map { ($1, $0) })
+        let history = MRUOrderingDeduplicator.uniqueIDs(historyItemIDs)
+        let unrecordedStackIndices = onScreenIDs.indices.filter { !history.contains(onScreenIDs[$0]) }
+
+        var offScreenIDsByStackIndex: [Int: [String]] = [:]
+        var trailingOffScreenIDs: [String] = []
         var historyOnlyIDs: [String] = []
 
-        for id in MRUOrderingDeduplicator.uniqueIDs(historyItemIDs) {
-            guard onScreenIDSet.contains(id) else {
-                pendingOffScreenIDs.append(id)
-                historyOnlyIDs.append(id)
-                continue
+        for (position, id) in history.enumerated() where stackIndexByID[id] == nil {
+            historyOnlyIDs.append(id)
+            let olderStackIndices = history[(position + 1)...].compactMap { stackIndexByID[$0] }
+                + unrecordedStackIndices
+            if let topmostOlderIndex = olderStackIndices.min() {
+                offScreenIDsByStackIndex[topmostOlderIndex, default: []].append(id)
+            } else {
+                trailingOffScreenIDs.append(id)
             }
-            offScreenIDsByOlderOnScreenID[id] = pendingOffScreenIDs
-            pendingOffScreenIDs.removeAll()
         }
 
-        let orderedIDs = onScreenIDs.flatMap { (offScreenIDsByOlderOnScreenID[$0] ?? []) + [$0] }
-            + pendingOffScreenIDs
+        let orderedIDs = onScreenIDs.indices.flatMap { index in
+            (offScreenIDsByStackIndex[index] ?? []) + [onScreenIDs[index]]
+        } + trailingOffScreenIDs
         return Result(orderedItemIDs: orderedIDs, historyOnlyItemIDs: historyOnlyIDs)
     }
 }

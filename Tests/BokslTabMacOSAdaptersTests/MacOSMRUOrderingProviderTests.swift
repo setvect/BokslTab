@@ -145,14 +145,72 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
-    func testMergerSlotsOffScreenHistoryJustAheadOfTheOnScreenRowUsedBeforeIt() {
+    func testMergerPlacesOffScreenRowAboveTheTopmostOlderOnScreenRow() {
         let result = MRUOrderMerger.merge(
             frontToBackItemIDs: ["B", "C", "D"],
             historyItemIDs: ["B", "X", "D", "C", "Y"]
         )
 
-        XCTAssertEqual(result.orderedItemIDs, ["B", "C", "X", "D", "Y"])
+        XCTAssertEqual(result.orderedItemIDs, ["B", "X", "C", "D", "Y"])
         XCTAssertEqual(result.historyOnlyItemIDs, ["X", "Y"])
+    }
+
+    func testMergerTreatsOnScreenRowsMissingFromHistoryAsOlder() {
+        let result = MRUOrderMerger.merge(
+            frontToBackItemIDs: ["desktop", "chat", "editor"],
+            historyItemIDs: ["desktop", "fullScreen", "editor"]
+        )
+
+        XCTAssertEqual(result.orderedItemIDs, ["desktop", "fullScreen", "chat", "editor"])
+    }
+
+    /// Back on the desktop after a full-screen window: it is off screen, yet it was used right before
+    /// the current window, so it is the default selection.
+    func testProviderSelectsFullScreenWindowUsedBeforeTheCurrentDesktopWindow() {
+        let chrome = AppIdentity(processIdentifier: 645, localizedName: "Chrome")
+        let kakao = AppIdentity(processIdentifier: 667, localizedName: "KakaoTalk")
+        let desktop = SwitcherItem(app: chrome, kind: .window(WindowIdentity(windowID: 151, ownerProcessIdentifier: 645, title: "Docs")))
+        let fullScreen = SwitcherItem(app: chrome, kind: .window(WindowIdentity(windowID: 689, ownerProcessIdentifier: 645, title: "Video")))
+        let chat = SwitcherItem(app: kakao, kind: .window(WindowIdentity(windowID: 78, ownerProcessIdentifier: 667, title: "Chat")))
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(
+                infoList: [windowInfo(windowID: 151, pid: 645), windowInfo(windowID: 78, pid: 667)]
+            ),
+            initialRecentItemIDs: [fullScreen.id]
+        )
+        let items = [chat, desktop, fullScreen]
+
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+        let ordered = SwitcherMRUOrderer.order(items: items, context: context)
+
+        XCTAssertEqual(ordered.map(\.id), [desktop.id, fullScreen.id, chat.id])
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
+    }
+
+    /// Reported at 10:26 UTC: right after leaving the full-screen window 2914 for 689, 2914 was last
+    /// in the list instead of selected. In its Space the topmost window was the toolbar Chrome keeps
+    /// above a full-screen window. That toolbar is not a row, so 2914 never entered the history.
+    func testProviderRemembersFullScreenWindowUnderAnUnlistedToolbarWindow() {
+        let chrome = AppIdentity(processIdentifier: 645, localizedName: "Chrome")
+        let claude = AppIdentity(processIdentifier: 2766, localizedName: "Claude")
+        let newVideo = SwitcherItem(app: chrome, kind: .window(WindowIdentity(windowID: 2914, ownerProcessIdentifier: 645, title: "New video")))
+        let video = SwitcherItem(app: chrome, kind: .window(WindowIdentity(windowID: 689, ownerProcessIdentifier: 645, title: "Video")))
+        let chat = SwitcherItem(app: claude, kind: .window(WindowIdentity(windowID: 240, ownerProcessIdentifier: 2766, title: "Chat")))
+        let lister = MutableCGWindowInfoLister()
+        let provider = MacOSMRUOrderingProvider(windowInfoLister: lister, initialRecentItemIDs: [chat.id, video.id])
+        let items = [chat, newVideo, video]
+
+        lister.infoList = [windowInfo(windowID: 2917, pid: 645), windowInfo(windowID: 2914, pid: 645)]
+        XCTAssertEqual(provider.orderingContext(for: .allAppsAndWindows, items: items).currentItemID, newVideo.id)
+
+        // The user picks 689, which is on the desktop with Claude.
+        provider.recordActivatedItem(video)
+        lister.infoList = [windowInfo(windowID: 689, pid: 645), windowInfo(windowID: 240, pid: 2766)]
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+        let ordered = SwitcherMRUOrderer.order(items: items, context: context)
+
+        XCTAssertEqual(ordered.map(\.id), [video.id, newVideo.id, chat.id])
+        XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
 
@@ -332,6 +390,14 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
 
 private struct FakeCGWindowInfoLister: CGWindowInfoListing {
     let infoList: [[String: Any]]?
+
+    func windowInfoList() -> [[String: Any]]? {
+        infoList
+    }
+}
+
+private final class MutableCGWindowInfoLister: CGWindowInfoListing {
+    var infoList: [[String: Any]]?
 
     func windowInfoList() -> [[String: Any]]? {
         infoList

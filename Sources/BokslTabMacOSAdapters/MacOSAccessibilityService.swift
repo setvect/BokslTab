@@ -3,6 +3,7 @@ import Foundation
 /// Shared by the catalog, event observer and activator; owns all retry decisions.
 public final class MacOSAccessibilityService: @unchecked Sendable {
     let workerQueue = DispatchQueue(label: "dev.boksl.BokslTab.accessibility", qos: .userInitiated)
+    let windowElements = AccessibilityWindowElementCache()
     // The event cache is initialized under the same lock; its AX work uses workerQueue.
     private var storedEventCache: AccessibilityWindowEventCache?
     var eventCache: AccessibilityWindowEventCache {
@@ -41,6 +42,7 @@ public final class MacOSAccessibilityService: @unchecked Sendable {
         lock.lock()
         retryAfterByPID = retryAfterByPID.filter { pids.contains($0.key) }
         lock.unlock()
+        windowElements.retainOnly(pids)
     }
 
     // Called only on workerQueue. AX handles and their messaging timeouts stay serialized.

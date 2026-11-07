@@ -6,8 +6,10 @@ import Foundation
 
 public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCatalogRefreshing {
     private var titleCache = WindowTitleCache()
+    private let seenWindows = SeenWindowRegistry()
     private let accessibility: MacOSAccessibilityService
     private let windowInfoList: () -> [[String: Any]]?
+    private let windowInfoForWindowID: (UInt32) -> [String: Any]?
     private let isAccessibilityTrusted: () -> Bool
     private let accessibilitySnapshotLoader: ((Int32, Bool) -> [AccessibilityWindowSnapshot]?)?
     private let accessibilityEventCache: AccessibilityWindowEventCache
@@ -29,15 +31,18 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
         windowInfoList: @escaping () -> [[String: Any]]? = {
             CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         },
+        windowInfoForWindowID: @escaping (UInt32) -> [String: Any]? = WindowServerWindowAccess.live.windowInfo,
         isAccessibilityTrusted: @escaping () -> Bool = AXIsProcessTrusted,
-        accessibilitySnapshotLoader: ((Int32, Bool) -> [AccessibilityWindowSnapshot]?)? = nil
+        accessibilitySnapshotLoader: ((Int32, Bool) -> [AccessibilityWindowSnapshot]?)? = nil,
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.accessibility = accessibility
         self.windowInfoList = windowInfoList
+        self.windowInfoForWindowID = windowInfoForWindowID
         self.isAccessibilityTrusted = isAccessibilityTrusted
         self.accessibilitySnapshotLoader = accessibilitySnapshotLoader
         self.accessibilityEventCache = accessibility.eventCache
-        self.accessibilityCache = BackgroundRefreshCache(queue: accessibility.workerQueue)
+        self.accessibilityCache = BackgroundRefreshCache(queue: accessibility.workerQueue, now: now)
     }
 
     public func windowsForAllApps() -> [WindowIdentity] {
@@ -62,7 +67,10 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
             }
         )
         let accessibilityTrusted = isAccessibilityTrusted()
-        if !accessibilityTrusted { titleCache = WindowTitleCache() }
+        if !accessibilityTrusted {
+            titleCache = WindowTitleCache()
+            seenWindows.removeAll()
+        }
         let requestedPIDs = Set(snapshots.map { $0.identity.ownerProcessIdentifier })
             .union(apps.map(\.processIdentifier))
         accessibilityCache.retainOnly(accessibilityTrusted ? requestedPIDs : [])
@@ -85,7 +93,10 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
                             return value
                         }
                         let snapshots = AccessibilityWindowDiscovery.snapshots(
-                            for: pid, resolveTabs: tabResolutionEligiblePIDs.contains(pid), query: query
+                            for: pid,
+                            resolveTabs: tabResolutionEligiblePIDs.contains(pid),
+                            query: query,
+                            elementCache: self.accessibility.windowElements
                         )
                         if let descriptor = descriptorsByPID[pid] {
                             self.accessibilityEventCache.ensureObserver(for: descriptor, query: query)
@@ -120,6 +131,7 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
         let accessibilityTrusted = isAccessibilityTrusted()
         if !accessibilityTrusted {
             titleCache = WindowTitleCache()
+            seenWindows.removeAll()
             accessibilityCache.retainOnly([])
         }
         let requestedPIDs = Set(snapshots.map { $0.identity.ownerProcessIdentifier })
@@ -131,7 +143,10 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
             snapshots,
             axSnapshotsByPID: axSnapshotsByPID
         )
-        let cachedEnrichedSnapshots = titleCache.applyCachedTitles(to: enrichedSnapshots)
+        // A window's own remembered title comes before the title cache, which holds one title per app.
+        // That cache titles only one of two same-frame windows; the other would be dropped as a duplicate.
+        let knownTitleSnapshots = seenWindows.applyRememberedTitles(to: enrichedSnapshots)
+        let cachedEnrichedSnapshots = titleCache.applyCachedTitles(to: knownTitleSnapshots)
         let filteredSnapshots = filterLikelyDuplicateUntitledSnapshots(cachedEnrichedSnapshots)
         let tabExpandedSnapshots = expandWindowTabsIfPossible(
             filteredSnapshots,
@@ -147,11 +162,20 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
             includedSnapshots: tabExpandedSnapshots + axOnlySnapshots,
             eligiblePIDs: accessibilityTrusted ? Set(tabExpansionEligibilityByPID.compactMap { $0.value.canExpandTabs ? $0.key : nil }) : []
         )
-        let liveSnapshots = tabExpandedSnapshots + axOnlySnapshots + accessibilityEventSnapshots
+        let otherSpaceSnapshots = rememberedSnapshotsOutsideVisibleSpaces(
+            apps: apps,
+            onScreenSnapshots: snapshots,
+            knownTitleSnapshots: knownTitleSnapshots,
+            includedSnapshots: tabExpandedSnapshots + axOnlySnapshots + accessibilityEventSnapshots,
+            axSnapshotsByPID: axSnapshotsByPID,
+            tabExpansionEligibilityByPID: tabExpansionEligibilityByPID,
+            accessibilityTrusted: accessibilityTrusted
+        )
+        let liveSnapshots = tabExpandedSnapshots + axOnlySnapshots + otherSpaceSnapshots + accessibilityEventSnapshots
         titleCache.record(filteredSnapshots + axOnlySnapshots)
         let resultSnapshots = liveSnapshots
         BokslTabDiagnosticLog.debug(
-            "window-catalog.result candidates=\(snapshots.count) enriched=\(enrichedSnapshots.count) cgIncluded=\(filteredSnapshots.count) tabExpanded=\(tabExpandedSnapshots.count) axOnly=\(axOnlySnapshots.count) axEventCached=\(accessibilityEventSnapshots.count) cached=0 included=\(resultSnapshots.count)"
+            "window-catalog.result candidates=\(snapshots.count) enriched=\(enrichedSnapshots.count) cgIncluded=\(filteredSnapshots.count) tabExpanded=\(tabExpandedSnapshots.count) axOnly=\(axOnlySnapshots.count) otherSpace=\(otherSpaceSnapshots.count) axEventCached=\(accessibilityEventSnapshots.count) cached=0 included=\(resultSnapshots.count)"
         )
         resultSnapshots.forEach { snapshot in
             BokslTabDiagnosticLog.debug("window-catalog.include \(snapshot.diagnosticDescription)")
@@ -354,6 +378,40 @@ public final class MacOSWindowCatalogProvider: WindowCatalogProviding, WindowCat
             BokslTabDiagnosticLog.debug("window-catalog.ax-only.include \(snapshot.diagnosticDescription)")
         }
         return axOnlySnapshots
+    }
+
+    /// Full-screen and other-desktop windows are absent from the on-screen CG list, and AX lists only
+    /// the current Space, so windows already shown are remembered and listed again while the window
+    /// server still holds them off screen. Tab-expanded apps keep their own AX event history instead.
+    ///
+    /// Only titles from CG, AX or this registry are remembered (`knownTitleSnapshots`); a title the
+    /// one-per-app cache guessed could belong to a sibling window.
+    private func rememberedSnapshotsOutsideVisibleSpaces(
+        apps: [AppIdentity],
+        onScreenSnapshots: [WindowSnapshot],
+        knownTitleSnapshots: [WindowSnapshot],
+        includedSnapshots: [WindowSnapshot],
+        axSnapshotsByPID: [Int32: [AccessibilityWindowSnapshot]],
+        tabExpansionEligibilityByPID: [Int32: AppTabExpansionEligibilityDecision],
+        accessibilityTrusted: Bool
+    ) -> [WindowSnapshot] {
+        guard accessibilityTrusted else { return [] }
+
+        seenWindows.applyAccessibilityState(axSnapshotsByPID)
+        seenWindows.recordOnScreen(knownTitleSnapshots.filter {
+            tabExpansionEligibilityByPID[$0.identity.ownerProcessIdentifier]?.canExpandTabs != true
+        })
+        guard !apps.isEmpty else { return [] }
+
+        let snapshots = seenWindows.offScreenSnapshots(
+            processIdentifiers: Set(apps.map(\.processIdentifier)),
+            excludingWindowIDs: Set((onScreenSnapshots + includedSnapshots).map(\.identity.windowID)),
+            windowInfo: windowInfoForWindowID
+        )
+        BokslTabDiagnosticLog.debug(
+            "window-catalog.other-space remembered=\(seenWindows.count) included=\(snapshots.count) windows=\(snapshots.map { String($0.identity.windowID) }.joined(separator: ","))"
+        )
+        return snapshots
     }
 
     private func accessibilityEventCachedSnapshotsForEligibleApps(

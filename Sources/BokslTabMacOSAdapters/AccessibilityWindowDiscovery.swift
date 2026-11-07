@@ -3,7 +3,14 @@ import Foundation
 
 /// Reads one app's live AX windows; all matching/composition is done on snapshots.
 enum AccessibilityWindowDiscovery {
-    static func snapshots(for pid: Int32, resolveTabs: Bool, query: AccessibilityQueryBudget) -> [AccessibilityWindowSnapshot] {
+    /// Handles of numbered windows go to `elementCache`, so the window stays raisable after it
+    /// leaves the current Space.
+    static func snapshots(
+        for pid: Int32,
+        resolveTabs: Bool,
+        query: AccessibilityQueryBudget,
+        elementCache: AccessibilityWindowElementCache? = nil
+    ) -> [AccessibilityWindowSnapshot] {
         let app = AXUIElementCreateApplication(pid)
         var windows = query.reader.elements(from: app, attribute: kAXWindowsAttribute)
         for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
@@ -13,8 +20,15 @@ enum AccessibilityWindowDiscovery {
             else { continue }
             windows.append(value as! AXUIElement)
         }
-        return AccessibilityWindowSnapshot.deduplicated(windows.compactMap {
-            AccessibilityWindowSnapshot(window: $0, resolveTabs: resolveTabs, query: query)
-        })
+        let snapshots = windows.compactMap { window -> AccessibilityWindowSnapshot? in
+            guard let snapshot = AccessibilityWindowSnapshot(window: window, resolveTabs: resolveTabs, query: query) else {
+                return nil
+            }
+            if let windowID = snapshot.windowID {
+                elementCache?.record(window, windowID: windowID, processIdentifier: pid)
+            }
+            return snapshot
+        }
+        return AccessibilityWindowSnapshot.deduplicated(snapshots)
     }
 }

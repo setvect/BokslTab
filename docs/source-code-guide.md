@@ -93,6 +93,8 @@ IntelliJ의 한 창에 프로젝트 탭이 세 개 있으면 탭 정보가 들�
 
 CG 창과 AX 창은 **창 번호**로 연결한다. AX 창의 번호는 비공개 함수 `_AXUIElementGetWindow`로 읽는다. 같은 앱의 최대화 창은 위치·크기가 같아서 번호 없이는 서로 구별할 수 없다. 번호를 읽지 못한 AX 창에만 위치·크기 매칭과 제목 보완을 쓴다.
 
+두 정보 모두 지금 보이는 Space의 창만 준다. 그래서 목록에 나온 창을 번호로 기억해 두고(`SeenWindowRegistry`), 다른 Space나 전체화면 Space로 간 창도 다시 목록에 넣는다. 화면에 보이는데 AX 정보에서 빠진 창에는 기억해 둔 제목을 준다. 그런 창으로 전환할 때는 SkyLight 비공개 함수로 창을 앞으로 가져오라고 요청한다(`WindowServerAccess`). 이어서 창이 보일 때 기억해 둔 AX 핸들로 앱이 직접 창을 올리게 한다(`AccessibilityWindowElementCache`). macOS는 앱이 창을 올릴 때 그 Space로 따라간다.
+
 ### 저장하는 내용이 서로 다르다
 
 | 담당 | 저장하거나 관리하는 것 | 관리 기준 |
@@ -101,7 +103,9 @@ CG 창과 AX 창은 **창 번호**로 연결한다. AX 창의 번호는 비공�
 | `WindowTitleCache` | 제목 보완용 최근 창 제목 | 제목이 약한 창에 보완, 기본 최대 64개 앱 |
 | `AccessibilityWindowEventCache` | AX 이벤트로 관찰한 창과 AX 핸들 | 구독한 앱의 최근 창, 앱별 최대 32개 |
 | `MacOSAccessibilityService` | 앱별 재시도 가능 시각 | 응답 실패·시간 소진 시 AX 요청을 15초 유예 |
-| `MacOSMRUOrderingProvider`의 이력 | 최근 사용한 앱·창의 대상 ID | 메모리에 최대 100개. 화면의 창은 CG 순서로 정렬하고, 이력은 숨긴 앱의 창·비활성 탭처럼 화면에 없는 항목의 자리에만 사용 |
+| `MacOSMRUOrderingProvider`의 이력 | 최근 사용한 앱·창의 대상 ID | 메모리에 최대 100개. 화면의 창은 CG 순서로 정렬하고, 이력은 다른 Space·전체화면 창, 숨긴 앱의 창, 비활성 탭처럼 화면에 없는 항목의 자리에만 사용. 목록을 열 때 목록에 나오는 맨 위 창을 기록 |
+| `SeenWindowRegistry` | 목록에 나온 창의 번호·제목·최소화 여부 | 최대 256개. 화면 밖으로 나가도 열려 있으면 다시 목록에 넣고, 닫히면 잊음. AX 정보에 빠진 화면 창에는 기억한 제목을 줌. 손쉬운 사용 권한이 없어지면 비움 |
+| `AccessibilityWindowElementCache` | 창이 보일 때 얻은 AX 핸들 | 앱·창 번호별 최대 512개. 다른 Space 창을 올릴 때 사용하고, 창 번호가 맞지 않으면 버림 |
 
 세 캐시 모두에 5초 제한이 있는 것은 아니다. **재시도 유예는 값의 캐시와 별도로, 접근성 서비스 한 곳에서 관리한다.** MRU는 최근 사용 순서를 위한 이력이다.
 
@@ -155,6 +159,7 @@ CG 창과 AX 창은 **창 번호**로 연결한다. AX 창의 번호는 비공�
 | [WindowCatalogPolicies.swift](../Sources/BokslTabMacOSAdapters/WindowCatalogPolicies.swift) | 창 매칭·제목 보완·중복 제거·AX 전용 창 규칙 |
 | [WindowTabCatalog.swift](../Sources/BokslTabMacOSAdapters/WindowTabCatalog.swift) | 탭 지원 앱 판별·AX 탭 해석·행 확장 |
 | [WindowTitleCache.swift](../Sources/BokslTabMacOSAdapters/WindowTitleCache.swift) | 최근 창 제목 보관과 제목 보완 |
+| [SeenWindowRegistry.swift](../Sources/BokslTabMacOSAdapters/SeenWindowRegistry.swift) | 목록에 나온 창을 기억해 다른 Space·전체화면 창을 다시 목록에 넣고 제목을 보완 |
 | [AccessibilityWindowEventCache.swift](../Sources/BokslTabMacOSAdapters/AccessibilityWindowEventCache.swift) | AX 알림 구독·이벤트 수집·최근 창과 핸들 보관 |
 | [AccessibilityEventHistory.swift](../Sources/BokslTabMacOSAdapters/AccessibilityEventHistory.swift) | 이벤트 이력의 보존·매칭·목록 변환 |
 | [BackgroundRefreshCache.swift](../Sources/BokslTabMacOSAdapters/BackgroundRefreshCache.swift) | 상세 값의 유효 기간·중복 갱신·완료 알림 묶기 |
@@ -162,6 +167,8 @@ CG 창과 AX 창은 **창 번호**로 연결한다. AX 창의 번호는 비공�
 | [AccessibilityQueryBudget.swift](../Sources/BokslTabMacOSAdapters/AccessibilityQueryBudget.swift) | 개별 조회·동작의 시간 제한과 교체 가능한 AX API |
 | [AXElementReader.swift](../Sources/BokslTabMacOSAdapters/AXElementReader.swift) | AX 값에서 문자열·좌표·크기·요소를 읽는 공통 도구 |
 | [MacOSActivation.swift](../Sources/BokslTabMacOSAdapters/MacOSActivation.swift) | 앱·창·탭 활성화와 정확한 대상 매칭, 실패 시 앱 대체 |
+| [WindowServerAccess.swift](../Sources/BokslTabMacOSAdapters/WindowServerAccess.swift) | 창 번호로 CG 표시 상태 확인, SkyLight로 다른 Space·전체화면 창 전환 |
+| [AccessibilityWindowElementCache.swift](../Sources/BokslTabMacOSAdapters/AccessibilityWindowElementCache.swift) | 창이 보일 때 얻은 AX 핸들을 기억해 다른 Space의 창도 올릴 수 있게 함 |
 | [MacOSMRUOrderingProvider.swift](../Sources/BokslTabMacOSAdapters/MacOSMRUOrderingProvider.swift) | 현재 CG 창 순서로 MRU를 만들고, 화면에 없는 항목은 활성화 이력으로 배치 |
 | [PrioritizedGlobalHotkeyService.swift](../Sources/BokslTabMacOSAdapters/PrioritizedGlobalHotkeyService.swift) | 기본 단축키 대체 방식의 우선순위와 실패 시 정리 |
 | [NativeCommandTabHotkeyService.swift](../Sources/BokslTabMacOSAdapters/NativeCommandTabHotkeyService.swift) | macOS 기본 Cmd+Tab 상태 변경·복원 |
@@ -180,7 +187,7 @@ CG 창과 AX 창은 **창 번호**로 연결한다. AX 창의 번호는 비공�
 | 목록 위치·표시·닫기 | `SwitcherPanelController` | `SwitcherPanelLayoutTests` |
 | 다음·이전·취소 키 | `SwitcherKeyboardMapper`와 `SwitcherKeyboardAction` | `SwitcherKeyboardMapperTests` |
 | 키를 길게 누를 때 속도 | `SwitcherKeyRepeatTiming` | `SwitcherKeyboardMapperTests`의 반복 동작 테스트 |
-| 목록에 포함할 창·제목 보완 | `MacOSWindowCatalogProvider`와 `WindowCatalogPolicies` | `AXWindowMatchPolicyTests`, `WindowIdentityMatchingTests`, `WindowCatalogResponsivenessTests` |
+| 목록에 포함할 창·제목 보완 | `MacOSWindowCatalogProvider`와 `WindowCatalogPolicies` | `AXWindowMatchPolicyTests`, `WindowIdentityMatchingTests`, `OtherSpaceWindowTests`, `WindowCatalogResponsivenessTests` |
 | 네이티브 탭 지원·탭 펼치기 | `WindowTabCatalog` | `WindowTabPolicyTests` |
 | 갱신 후 선택 유지 | `SwitcherState.mergeRefreshedItems` | `SwitcherRefreshTests` |
 | 최근 사용 순서 | Core의 `SwitcherMRUOrderer`, macOS의 MRU 제공자 | `SwitcherStateTests`, `MacOSMRUOrderingProviderTests` |
