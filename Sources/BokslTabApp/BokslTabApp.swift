@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appActivator: MacOSAppActivator(),
             windowActivator: MacOSWindowActivator(accessibility: accessibility),
             permissionAdvisor: MacOSPermissionAdvisor(),
-            mruOrderingProvider: MacOSMRUOrderingProvider(),
+            mruOrderingProvider: MacOSMRUOrderingProvider(accessibility: accessibility),
             hotkeyService: PrioritizedGlobalHotkeyService()
         )
         self.coordinator = coordinator

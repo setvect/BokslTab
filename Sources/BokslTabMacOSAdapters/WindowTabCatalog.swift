@@ -206,53 +206,127 @@ struct AccessibilityTabResolver {
     }
 }
 
-struct TabExpansionResult {
-    let snapshots: [WindowSnapshot]
-    let didExpand: Bool
-    let fallbackReason: String?
-}
+/// Pairs the tabs of an app's tab bars with the windows known for them.
+///
+/// Every tab of a native tab group is a window of its own, but AX lists only the selected one and
+/// names the others just by their tab titles. A tab belongs to the window already known for it: the
+/// group's on-screen window, or a remembered window that is now shown on no Space. Those keep their
+/// window rows and numbers. Only a tab nobody claims becomes a tab row, reached by pressing it.
+final class NativeTabMatcher {
+    struct Tab: Equatable {
+        let index: Int
+        let title: String
 
-struct TabExpandedWindowCatalogPolicy {
-    static func expand(
-        snapshot: WindowSnapshot,
-        tabs: [AccessibilityTabSnapshot],
-        parentFrame: WindowFrameIdentity? = nil
-    ) -> TabExpansionResult {
-        guard tabs.count > 1 else {
-            return TabExpansionResult(snapshots: [snapshot], didExpand: false, fallbackReason: "single-tab")
-        }
-
-        let usableTabs = tabs.compactMap { tab -> (AccessibilityTabSnapshot, String)? in
-            guard let title = usableTitle(tab.title) else { return nil }
-            return (tab, title)
-        }
-        guard usableTabs.count >= 2 else {
-            return TabExpansionResult(snapshots: [snapshot], didExpand: false, fallbackReason: "placeholder-title")
-        }
-
-        let expanded = usableTabs.map { tab, title in
-            WindowSnapshot(
-                identity: WindowIdentity(
-                    windowID: snapshot.identity.windowID,
-                    ownerProcessIdentifier: snapshot.identity.ownerProcessIdentifier,
-                    title: title,
-                    tab: WindowTabIdentity(
-                        parentWindowID: snapshot.identity.windowID,
-                        parentTitle: snapshot.identity.title?.nonBlankCatalogTitle,
-                        parentFrame: parentFrame,
-                        index: tab.index,
-                        title: title,
-                        isSelected: tab.isSelected
-                    ),
-                    source: snapshot.identity.source
-                ),
-                bounds: snapshot.bounds,
-                ownerName: snapshot.ownerName
-            )
-        }
-        return TabExpansionResult(snapshots: expanded, didExpand: true, fallbackReason: nil)
+        var key: String { StableWindowTitleKey.normalized(title) }
     }
 
+    struct Group {
+        /// The group's window that is on screen now; unclaimed tabs are pressed in it.
+        let parent: WindowSnapshot
+        let tabBarFrame: CGRect
+        var unclaimedTabs: [Tab]
+    }
+
+    private var groups: [Group]
+
+    init(groups: [Group] = []) {
+        self.groups = groups
+    }
+
+    /// Whether a window of the app that is shown on no Space is one of its unselected tabs. The tab it
+    /// matches is taken, so a second window with the same name needs a second tab of that name.
+    func claimTab(processIdentifier: Int32, keys: Set<String>) -> Bool {
+        for groupIndex in groups.indices
+        where groups[groupIndex].parent.identity.ownerProcessIdentifier == processIdentifier {
+            guard let tabIndex = groups[groupIndex].unclaimedTabs.firstIndex(where: { keys.contains($0.key) }) else {
+                continue
+            }
+            groups[groupIndex].unclaimedTabs.remove(at: tabIndex)
+            return true
+        }
+        return false
+    }
+
+    /// Tabs whose windows have not been seen yet. Call after every known window has claimed its tab.
+    func unclaimedTabSnapshots() -> [WindowSnapshot] {
+        groups.flatMap { group in
+            group.unclaimedTabs.map { tab in
+                WindowSnapshot(
+                    identity: WindowIdentity(
+                        windowID: group.parent.identity.windowID,
+                        ownerProcessIdentifier: group.parent.identity.ownerProcessIdentifier,
+                        title: tab.title,
+                        tab: WindowTabIdentity(
+                            parentWindowID: group.parent.identity.windowID,
+                            parentTitle: group.parent.identity.title?.nonBlankCatalogTitle,
+                            parentFrame: group.tabBarFrame.windowFrameIdentity,
+                            index: tab.index,
+                            title: tab.title,
+                            isSelected: false
+                        ),
+                        source: group.parent.identity.source
+                    ),
+                    bounds: group.parent.bounds,
+                    ownerName: group.parent.ownerName
+                )
+            }
+        }
+    }
+}
+
+extension NativeTabMatcher.Group {
+    /// The tab bar as AX last read it. The details may predate a tab switch: then the window they
+    /// describe is an unselected tab now, and the on-screen window in its place is the group's parent.
+    /// Returns nil when the bar holds a single tab or no window of the group is on screen.
+    init?(
+        tabBar: AccessibilityWindowSnapshot,
+        onScreenRows: [WindowSnapshot],
+        rememberedKeysByWindowID: [UInt32: Set<String>],
+        isOrderedOut: (UInt32) -> Bool
+    ) {
+        guard tabBar.tabs.count > 1 else { return nil }
+        var tabs = tabBar.tabs.compactMap { tab in
+            TabTitlePolicy.usableTitle(tab.title).map { (tab: NativeTabMatcher.Tab(index: tab.index, title: $0), isSelected: tab.isSelected) }
+        }
+
+        func siblingOnScreen() -> WindowSnapshot? {
+            WindowFrameMatchPolicy.bestFrameMatchIndex(
+                targetFrame: tabBar.frame,
+                candidateFrames: onScreenRows.map(\.bounds)
+            ).map { onScreenRows[$0] }
+        }
+        func claimByTitle(_ row: WindowSnapshot) {
+            var keys = rememberedKeysByWindowID[row.identity.windowID] ?? []
+            if let title = row.identity.title?.nonBlankCatalogTitle {
+                keys.insert(StableWindowTitleKey.normalized(title))
+            }
+            if let index = tabs.firstIndex(where: { keys.contains($0.tab.key) }) {
+                tabs.remove(at: index)
+            }
+        }
+
+        let own = tabBar.windowID.flatMap { windowID in onScreenRows.first { $0.identity.windowID == windowID } }
+            ?? (tabBar.windowID == nil ? siblingOnScreen() : nil)
+        if let own {
+            // The selected tab is this window itself, whatever the two are titled.
+            if let index = tabs.firstIndex(where: \.isSelected) {
+                tabs.remove(at: index)
+            } else {
+                claimByTitle(own)
+            }
+            self.parent = own
+        } else if let windowID = tabBar.windowID, isOrderedOut(windowID), let sibling = siblingOnScreen() {
+            claimByTitle(sibling)
+            self.parent = sibling
+        } else {
+            return nil
+        }
+        self.tabBarFrame = tabBar.frame
+        self.unclaimedTabs = tabs.map(\.tab)
+    }
+}
+
+struct TabTitlePolicy {
     static func usableTitle(_ title: String?) -> String? {
         guard let title = title?.nonBlankCatalogTitle,
               !isPlaceholderTitle(title)

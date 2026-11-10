@@ -5,20 +5,6 @@ import CoreGraphics
 import Foundation
 
 enum SyntheticWindowID {
-    static func accessibilityEvent(
-        processIdentifier: Int32,
-        title: String,
-        frame: CGRect,
-        index: Int
-    ) -> UInt32 {
-        0x2000_0000 | (hash(
-            processIdentifier: processIdentifier,
-            title: StableWindowTitleKey.normalized(title),
-            frame: frame,
-            index: index
-        ) & 0x1fff_ffff)
-    }
-
     static func axOnly(
         processIdentifier: Int32,
         title: String,

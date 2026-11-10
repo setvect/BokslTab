@@ -4,18 +4,37 @@ import Foundation
 public final class MacOSAccessibilityService: @unchecked Sendable {
     let workerQueue = DispatchQueue(label: "dev.boksl.BokslTab.accessibility", qos: .userInitiated)
     let windowElements = AccessibilityWindowElementCache()
-    // The event cache is initialized under the same lock; its AX work uses workerQueue.
-    private var storedEventCache: AccessibilityWindowEventCache?
-    var eventCache: AccessibilityWindowEventCache {
+    /// Every window seen so far, by window number. The catalog, the event observer and the activator
+    /// share it, so a window has one identity and one remembered title.
+    let knownWindows = SeenWindowRegistry()
+    // The event observer is initialized under the same lock; its AX work uses workerQueue.
+    private var storedEventObserver: AccessibilityWindowEventObserver?
+    var eventObserver: AccessibilityWindowEventObserver {
         lock.lock()
         defer { lock.unlock() }
-        if let storedEventCache { return storedEventCache }
-        let cache = AccessibilityWindowEventCache(accessibility: self)
-        storedEventCache = cache
-        return cache
+        if let storedEventObserver { return storedEventObserver }
+        let observer = AccessibilityWindowEventObserver(accessibility: self)
+        storedEventObserver = observer
+        return observer
     }
     private let lock = NSLock()
+    private var storedWindowFocusHandler: ((_ windowID: UInt32, _ processIdentifier: Int32) -> Void)?
+    /// Called on the AX worker queue when an observed app reports that one of its windows took focus,
+    /// such as a project tab clicked inside the app. No app activation announces that switch.
+    var windowFocusHandler: ((_ windowID: UInt32, _ processIdentifier: Int32) -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedWindowFocusHandler
+        }
+        set {
+            lock.lock()
+            storedWindowFocusHandler = newValue
+            lock.unlock()
+        }
+    }
     private var retryAfterByPID: [Int32: TimeInterval] = [:]
+    private var consecutiveFailuresByPID: [Int32: Int] = [:]
     private let retryDelay: TimeInterval
     private let now: () -> TimeInterval
     private let api: AccessibilityAPI
@@ -32,17 +51,27 @@ public final class MacOSAccessibilityService: @unchecked Sendable {
         self.now = now
     }
 
+    /// The wait after the first failure. An app that is merely busy, like IntelliJ while it switches
+    /// projects, answers again within a second or two; one missed request must not cost fifteen.
+    static let firstRetryDelay: TimeInterval = 1
+
     func isCoolingDown(_ pid: Int32) -> Bool {
+        secondsUntilRetry(pid) > 0
+    }
+
+    func secondsUntilRetry(_ pid: Int32) -> TimeInterval {
         lock.lock()
         defer { lock.unlock() }
-        return (retryAfterByPID[pid] ?? 0) > now()
+        return max(0, (retryAfterByPID[pid] ?? 0) - now())
     }
 
     func retainOnly(_ pids: Set<Int32>) {
         lock.lock()
         retryAfterByPID = retryAfterByPID.filter { pids.contains($0.key) }
+        consecutiveFailuresByPID = consecutiveFailuresByPID.filter { pids.contains($0.key) }
         lock.unlock()
         windowElements.retainOnly(pids)
+        knownWindows.retainOnly(pids)
     }
 
     // Called only on workerQueue. AX handles and their messaging timeouts stay serialized.
@@ -62,12 +91,21 @@ public final class MacOSAccessibilityService: @unchecked Sendable {
         guard !isCancelled() else { return nil }
         _ = query.remainingTimeout
         if query.failed {
+            // The wait doubles while the app keeps failing, up to `retryDelay` for one that hangs.
             lock.lock()
-            retryAfterByPID[pid] = now() + retryDelay
+            let failures = (consecutiveFailuresByPID[pid] ?? 0) + 1
+            consecutiveFailuresByPID[pid] = failures
+            let delay = min(retryDelay, Self.firstRetryDelay * pow(2, Double(min(failures, 16) - 1)))
+            retryAfterByPID[pid] = now() + delay
             lock.unlock()
-            BokslTabDiagnosticLog.write("accessibility.deferred pid=\(pid) retryAfterSeconds=\(Int(retryDelay))")
+            BokslTabDiagnosticLog.write(
+                "accessibility.deferred pid=\(pid) retryAfterSeconds=\(Int(delay)) failures=\(failures)"
+            )
             return nil
         }
+        lock.lock()
+        consecutiveFailuresByPID.removeValue(forKey: pid)
+        lock.unlock()
         return value
     }
 

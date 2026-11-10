@@ -1,3 +1,4 @@
+import AppKit
 import BokslTabCore
 @testable import BokslTabMacOSAdapters
 import CoreGraphics
@@ -145,23 +146,44 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(SwitcherMRUOrderer.defaultSelectedIndex(orderedItems: ordered, context: context), 1)
     }
 
-    func testMergerPlacesOffScreenRowAboveTheTopmostOlderOnScreenRow() {
+    func testMergerPlacesOffScreenRowBelowTheLowestNewerOnScreenRow() {
         let result = MRUOrderMerger.merge(
             frontToBackItemIDs: ["B", "C", "D"],
-            historyItemIDs: ["B", "X", "D", "C", "Y"]
+            recordedItemIDs: ["B", "X", "D", "C", "Y"]
         )
 
         XCTAssertEqual(result.orderedItemIDs, ["B", "X", "C", "D", "Y"])
-        XCTAssertEqual(result.historyOnlyItemIDs, ["X", "Y"])
+        XCTAssertEqual(result.offScreenItemIDs, ["X", "Y"])
     }
 
-    func testMergerTreatsOnScreenRowsMissingFromHistoryAsOlder() {
+    func testMergerKeepsOffScreenRowRightBelowTheCurrentRowWhenOtherRowsAreUnrecorded() {
         let result = MRUOrderMerger.merge(
             frontToBackItemIDs: ["desktop", "chat", "editor"],
-            historyItemIDs: ["desktop", "fullScreen", "editor"]
+            recordedItemIDs: ["desktop", "fullScreen", "editor"]
         )
 
         XCTAssertEqual(result.orderedItemIDs, ["desktop", "fullScreen", "chat", "editor"])
+    }
+
+    /// Reported at 10:09:49 UTC: iTerm's second window (462) came on screen for the first time,
+    /// raised together with iTerm, and the IntelliJ project used before Chrome jumped ahead of Chrome.
+    func testMergerIgnoresAnUnrecordedOnScreenRowWhenPlacingOffScreenRows() {
+        let result = MRUOrderMerger.merge(
+            frontToBackItemIDs: ["iterm133", "idea1231", "iterm462", "chrome85", "slack109"],
+            recordedItemIDs: ["iterm133", "idea1231", "chrome85", "idea1241", "slack109"]
+        )
+
+        XCTAssertEqual(result.orderedItemIDs, ["iterm133", "idea1231", "iterm462", "chrome85", "idea1241", "slack109"])
+    }
+
+    /// A window raised by a click sits higher than the list knows; rows used before it stay below it.
+    func testMergerKeepsOffScreenRowBelowARowTheStackingRaised() {
+        let result = MRUOrderMerger.merge(
+            frontToBackItemIDs: ["B", "D", "C"],
+            recordedItemIDs: ["B", "C", "X", "D"]
+        )
+
+        XCTAssertEqual(result.orderedItemIDs, ["B", "D", "C", "X"])
     }
 
     /// Back on the desktop after a full-screen window: it is off screen, yet it was used right before
@@ -214,7 +236,153 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
     }
 
 
-    func testProviderMapsStableTitleHistoryAfterAccessibilityEventTitleChanges() {
+    /// Reported at 11:05:10 UTC: windows that were only ever seen on screen (never picked) had no place
+    /// once they left the screen and fell to the end by title. The corrected order is saved each time
+    /// the full list opens, so such a window keeps the place its stacking gave it.
+    func testProviderKeepsThePlaceOfARowThatWasOnlySeenOnScreen() {
+        let apps = [10, 20, 30].map { AppIdentity(processIdentifier: Int32($0), localizedName: "App\($0)") }
+        let top = window(100, app: apps[0], title: "Zebra")
+        let middle = window(200, app: apps[1], title: "Yak")
+        let bottom = window(300, app: apps[2], title: "Apple")
+        let lister = MutableCGWindowInfoLister()
+        let provider = MacOSMRUOrderingProvider(windowInfoLister: lister)
+        let items = [top, middle, bottom]
+
+        lister.infoList = [windowInfo(windowID: 100, pid: 10), windowInfo(windowID: 200, pid: 20), windowInfo(windowID: 300, pid: 30)]
+        _ = provider.orderingContext(for: .allAppsAndWindows, items: items)
+
+        // The middle window moves to another Space.
+        lister.infoList = [windowInfo(windowID: 100, pid: 10), windowInfo(windowID: 300, pid: 30)]
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+
+        XCTAssertEqual(context.orderedItemIDs, [top.id, middle.id, bottom.id])
+    }
+
+    func testProviderPutsARowSeenForTheFirstTimeOffScreenLastByTitle() {
+        let app = AppIdentity(processIdentifier: 10, localizedName: "App")
+        let current = window(100, app: app, title: "Current")
+        let zebra = window(200, app: app, title: "Zebra")
+        let apple = window(300, app: app, title: "Apple")
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: FakeCGWindowInfoLister(infoList: [windowInfo(windowID: 100, pid: 10)])
+        )
+
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: [zebra, current, apple])
+
+        XCTAssertEqual(context.orderedItemIDs, [current.id, apple.id, zebra.id])
+    }
+
+    /// The active-app list holds one app's windows. Saving it would move all of them ahead of the
+    /// other apps' windows in the shared order.
+    func testActiveAppListDoesNotReorderOtherApps() {
+        let editor = AppIdentity(processIdentifier: 10, localizedName: "Editor")
+        let browser = AppIdentity(processIdentifier: 20, localizedName: "Browser")
+        let editorFront = window(100, app: editor, title: "Front")
+        let editorOtherSpace = window(101, app: editor, title: "Other Space")
+        let browserWindow = window(200, app: browser, title: "Docs")
+        let lister = MutableCGWindowInfoLister()
+        lister.infoList = [windowInfo(windowID: 100, pid: 10), windowInfo(windowID: 200, pid: 20)]
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: lister,
+            initialRecentItemIDs: [editorFront.id, browserWindow.id, editorOtherSpace.id]
+        )
+
+        _ = provider.orderingContext(for: .activeAppWindows, items: [editorFront, editorOtherSpace])
+        let items = [editorFront, editorOtherSpace, browserWindow]
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+
+        XCTAssertEqual(context.orderedItemIDs, [editorFront.id, browserWindow.id, editorOtherSpace.id])
+    }
+
+    /// A full-screen window entered and left without opening the list: the app activation moves the
+    /// topmost known row to the front, not the toolbar window Chrome keeps above it.
+    func testAppActivationMovesTheTopmostKnownRowToTheFront() {
+        let chrome = AppIdentity(processIdentifier: 645, localizedName: "Chrome")
+        let code = AppIdentity(processIdentifier: 661, localizedName: "Code")
+        let video = window(689, app: chrome, title: "Video")
+        let editor = window(95, app: code, title: "Editor")
+        let notes = window(97, app: code, title: "Notes")
+        let lister = MutableCGWindowInfoLister()
+        let provider = MacOSMRUOrderingProvider(
+            windowInfoLister: lister,
+            initialRecentItemIDs: [editor.id, notes.id, video.id]
+        )
+        let items = [video, editor, notes]
+
+        lister.infoList = [windowInfo(windowID: 95, pid: 661), windowInfo(windowID: 97, pid: 661)]
+        XCTAssertEqual(
+            provider.orderingContext(for: .allAppsAndWindows, items: items).orderedItemIDs,
+            [editor.id, notes.id, video.id]
+        )
+
+        // Into the full-screen Space by a swipe, then back to the desktop.
+        lister.infoList = [windowInfo(windowID: 692, pid: 645), windowInfo(windowID: 689, pid: 645)]
+        provider.recordActivatedApplication(processIdentifier: 645)
+        lister.infoList = [windowInfo(windowID: 95, pid: 661), windowInfo(windowID: 97, pid: 661)]
+        provider.recordActivatedApplication(processIdentifier: 661)
+
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+
+        XCTAssertEqual(context.orderedItemIDs, [editor.id, video.id, notes.id])
+    }
+
+    /// Reported at 11:20:39 UTC: Claude's window was listed ahead of two IntelliJ projects used after
+    /// it. A project window had just appeared on top; when BokslTab's own panel activated, the window
+    /// below the new one (Claude's) was taken for the one in use and moved to the front.
+    func testActivationOfAnotherAppDoesNotPromoteTheRowBelowANewWindow() {
+        let idea = AppIdentity(processIdentifier: 7049, localizedName: "IntelliJ IDEA")
+        let claude = AppIdentity(processIdentifier: 4700, localizedName: "Claude")
+        let chrome = AppIdentity(processIdentifier: 655, localizedName: "Chrome")
+        let projectB = window(1231, app: idea, title: "Project B")
+        let projectA = window(1211, app: idea, title: "Project A")
+        let chat = window(661, app: claude, title: "Chat")
+        let browser = window(85, app: chrome, title: "Docs")
+        let lister = MutableCGWindowInfoLister()
+        let provider = MacOSMRUOrderingProvider(windowInfoLister: lister)
+
+        lister.infoList = [windowInfo(windowID: 1231, pid: 7049), windowInfo(windowID: 661, pid: 4700), windowInfo(windowID: 85, pid: 655)]
+        _ = provider.orderingContext(for: .allAppsAndWindows, items: [projectB, chat, browser])
+
+        // Project A's tab is clicked: its window appears on top, B's is no longer on screen.
+        lister.infoList = [windowInfo(windowID: 1211, pid: 7049), windowInfo(windowID: 661, pid: 4700), windowInfo(windowID: 85, pid: 655)]
+        // The switcher's panel activates; it has no window in the stacking.
+        provider.recordActivatedApplication(processIdentifier: 99_999)
+        let items = [projectA, projectB, chat, browser]
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+
+        XCTAssertEqual(context.orderedItemIDs, [projectA.id, projectB.id, chat.id, browser.id])
+    }
+
+    /// Reported at 10:14:51 UTC: the IntelliJ project used until 10:11 was listed below iTerm, last
+    /// used at 10:09. Switching projects by clicking a tab activates no app, so only the focus event
+    /// of the project window tells that it was used.
+    func testWindowFocusInsideAnAppMovesThatWindowToTheFront() {
+        let idea = AppIdentity(processIdentifier: 7049, localizedName: "IntelliJ IDEA")
+        let chrome = AppIdentity(processIdentifier: 655, localizedName: "Chrome")
+        let projectA = window(1211, app: idea, title: "Project A")
+        let projectB = window(1231, app: idea, title: "Project B")
+        let projectC = window(1241, app: idea, title: "Project C")
+        let browser = window(85, app: chrome, title: "Docs")
+        let lister = MutableCGWindowInfoLister()
+        let provider = MacOSMRUOrderingProvider(windowInfoLister: lister)
+        let items = [projectA, projectB, projectC, browser]
+
+        lister.infoList = [windowInfo(windowID: 1211, pid: 7049), windowInfo(windowID: 85, pid: 655)]
+        XCTAssertEqual(
+            provider.orderingContext(for: .allAppsAndWindows, items: items).orderedItemIDs,
+            [projectA.id, browser.id, projectB.id, projectC.id]
+        )
+
+        // The user clicks project C's tab, then project B's.
+        provider.recordFocusedWindow(windowID: 1241, processIdentifier: 7049)
+        provider.recordFocusedWindow(windowID: 1231, processIdentifier: 7049)
+        lister.infoList = [windowInfo(windowID: 1231, pid: 7049), windowInfo(windowID: 85, pid: 655)]
+        let context = provider.orderingContext(for: .allAppsAndWindows, items: items)
+
+        XCTAssertEqual(context.orderedItemIDs, [projectB.id, projectC.id, projectA.id, browser.id])
+    }
+
+    func testProviderMapsStableTitleHistoryAfterATabRowTitleChanges() {
         let app = AppIdentity(processIdentifier: 10, localizedName: "IntelliJ IDEA")
         let currentTitle = "BokslTab – Models.swift"
         let current = SwitcherItem(
@@ -223,7 +391,7 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
                 windowID: 300,
                 ownerProcessIdentifier: 10,
                 title: currentTitle,
-                source: .accessibilityEvent
+                tab: WindowTabIdentity(parentWindowID: 300, index: 1, title: currentTitle)
             ))
         )
         let previousTitleAlias = SwitcherItem.stableTitleAliasID(
@@ -293,7 +461,8 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
 
         let context = provider.orderingContext(for: .activeAppWindows, items: [firstTab, selectedTab])
 
-        XCTAssertEqual(context.orderedItemIDs, [selectedTab.id])
+        // The other tab has no place yet, so it follows; the parent window stands for the selected tab.
+        XCTAssertEqual(context.orderedItemIDs, [selectedTab.id, firstTab.id])
         XCTAssertEqual(context.currentItemID, selectedTab.id)
     }
 
@@ -376,6 +545,14 @@ final class MacOSMRUOrderingProviderTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.id), [currentTab.id, previousTab.id])
     }
 
+
+    private func window(_ windowID: UInt32, app: AppIdentity, title: String) -> SwitcherItem {
+        SwitcherItem(app: app, kind: .window(WindowIdentity(
+            windowID: windowID,
+            ownerProcessIdentifier: app.processIdentifier,
+            title: title
+        )))
+    }
 
     private func windowInfo(windowID: UInt32, pid: Int32) -> [String: Any] {
         [

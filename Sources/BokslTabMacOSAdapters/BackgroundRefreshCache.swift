@@ -1,6 +1,10 @@
 import Foundation
 
 /// Readers never wait for the loader. Only one refresh per key can be queued or running.
+///
+/// A value stays readable until a newer one replaces it or its key is removed. The first list after
+/// an idle stretch is built from it at once and corrected when the refresh arrives; dropping old
+/// values instead made that list come up short and then grow.
 final class BackgroundRefreshCache<Key: Hashable, Value> {
     private struct Entry {
         var value: Value?
@@ -12,7 +16,6 @@ final class BackgroundRefreshCache<Key: Hashable, Value> {
     private let queue: DispatchQueue
     private let now: () -> TimeInterval
     private let refreshInterval: TimeInterval
-    private let maximumAge: TimeInterval
     private var entries: [Key: Entry] = [:]
     // Set and invoked on the main queue.
     var onRefresh: (() -> Void)?
@@ -21,20 +24,17 @@ final class BackgroundRefreshCache<Key: Hashable, Value> {
     init(
         queue: DispatchQueue,
         refreshInterval: TimeInterval = 0.5,
-        maximumAge: TimeInterval = 5,
         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.queue = queue
         self.refreshInterval = refreshInterval
-        self.maximumAge = maximumAge
         self.now = now
     }
 
     func value(for key: Key) -> Value? {
         lock.lock()
         defer { lock.unlock() }
-        guard let entry = entries[key], now() - entry.updatedAt <= maximumAge else { return nil }
-        return entry.value
+        return entries[key]?.value
     }
 
     func refresh(_ key: Key, load: @escaping () -> Value?) {

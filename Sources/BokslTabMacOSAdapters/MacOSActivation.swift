@@ -82,6 +82,9 @@ public final class MacOSWindowActivator: WindowActivating {
     private let isAccessibilityTrusted: () -> Bool
     private let accessibility: MacOSAccessibilityService
     private let windowServer: WindowServerWindowAccess
+    private let outcomeDelay: TimeInterval
+    /// Counts switches, so a check that fires late can tell that the user has started another one.
+    @MainActor private var latestActivation = 0
 
     public convenience init(
         appActivator: AppActivating = MacOSAppActivator(options: []),
@@ -100,25 +103,43 @@ public final class MacOSWindowActivator: WindowActivating {
         appActivator: AppActivating,
         isAccessibilityTrusted: @escaping () -> Bool,
         accessibility: MacOSAccessibilityService,
-        windowServer: WindowServerWindowAccess
+        windowServer: WindowServerWindowAccess,
+        outcomeDelay: TimeInterval = 0.6
     ) {
         self.appActivator = appActivator
         self.isAccessibilityTrusted = isAccessibilityTrusted
         self.accessibility = accessibility
         self.windowServer = windowServer
-        _ = accessibility.eventCache
+        self.outcomeDelay = outcomeDelay
+        _ = accessibility.eventObserver
     }
 
     private enum Target {
         case window(AXUIElement)
         case tab(AXWindowTabMatch, AXTabActivationPlan)
+
+        var windowHandle: AXUIElement? {
+            if case .window(let element) = self { return element }
+            return nil
+        }
+    }
+
+    /// What a late check needs to make the switch once more.
+    private struct Repeat {
+        let activation: Int
+        let handle: AXUIElement?
+        /// Whether the window itself must have come on screen. Not for a row the window server cannot
+        /// tell about (a tab, a window known only to AX), nor when only the app was brought forward.
+        let checksWindow: Bool
     }
 
     @MainActor
     public func activate(window: WindowIdentity, app: AppIdentity) async -> SwitchResult {
         guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
+        latestActivation += 1
+        let activation = latestActivation
         guard isAccessibilityTrusted() else {
-            return fallbackToApp(app: app, intent: .focusOnly, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
+            return fallbackToApp(window: window, app: app, activation: activation, reason: "손쉬운 사용 권한이 없어 앱 활성화로 대체했습니다.")
         }
         // Tabs switch inside their parent window through AX; the window server only focuses whole windows.
         let placement: WindowServerPlacement = window.tab == nil
@@ -132,18 +153,16 @@ public final class MacOSWindowActivator: WindowActivating {
                 )
                 return .tab(match, plan)
             }
-            guard let element = self.findAXWindow(matching: window, app: app, query: query)
-                ?? self.findCachedAXWindow(matching: window, app: app)
-            else { return nil }
+            guard let element = self.findAXWindow(matching: window, app: app, query: query) else { return nil }
             return .window(element)
         }
         guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
         if placement == .offScreen,
-           let result = await activateOutsideVisibleSpaces(window: window, app: app, target: target) {
+           let result = await activateOutsideVisibleSpaces(window: window, app: app, target: target, activation: activation) {
             return result
         }
         guard let target else {
-            return fallbackToApp(app: app, intent: .focusOnly, reason: "대상 창 조회가 지연되거나 정확히 식별되지 않아 앱 활성화로 대체했습니다.")
+            return fallbackToApp(window: window, app: app, activation: activation, reason: "대상 창 조회가 지연되거나 정확히 식별되지 않아 앱 활성화로 대체했습니다.")
         }
 
         _ = appActivator.activate(app: app)
@@ -151,18 +170,39 @@ public final class MacOSWindowActivator: WindowActivating {
         let result: SwitchResult? = await accessibility.run(
             for: app.processIdentifier, duration: 1, requestTimeout: 0.25
         ) { query in
-            self.performActivation(target, query: query)
+            self.performActivation(target, restoresMinimized: placement != .onScreen, query: query)
         }
         guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
-        return result ?? fallbackToApp(app: app, intent: .focusOnly, reason: "창 활성화가 지연되어 앱 활성화로 대체했습니다.")
+        if result != nil {
+            logOutcome(
+                of: window, app: app, after: window.tab == nil ? "accessibility" : "tab",
+                repeatable: Repeat(
+                    activation: activation, handle: target.windowHandle, checksWindow: placement != .missing
+                )
+            )
+        }
+        if let tab = window.tab, result == .exactWindowSuccess {
+            // The window this tab brings on screen has not been seen; the catalog names it by this title.
+            accessibility.knownWindows.expectWindow(
+                forTabTitled: tab.title,
+                processIdentifier: app.processIdentifier,
+                now: ProcessInfo.processInfo.systemUptime
+            )
+        }
+        return result ?? fallbackToApp(window: window, app: app, activation: activation, reason: "창 활성화가 지연되어 앱 활성화로 대체했습니다.")
     }
 
     /// AX cannot list a window on another desktop or in a full-screen Space, but the window server can
     /// focus it. macOS reliably follows to that Space only when the owning app raises the window itself,
     /// so the handle remembered from when the window was visible is raised right after (AltTab's order).
-    /// A minimized window is restored on the way. Returns nil to fall back when the window server refuses.
+    /// Returns nil to fall back when the window server refuses.
     @MainActor
-    private func activateOutsideVisibleSpaces(window: WindowIdentity, app: AppIdentity, target: Target?) async -> SwitchResult? {
+    private func activateOutsideVisibleSpaces(
+        window: WindowIdentity,
+        app: AppIdentity,
+        target: Target?,
+        activation: Int
+    ) async -> SwitchResult? {
         let focus = windowServer.focus(window.windowID, app.processIdentifier)
         guard focus == .focused else {
             BokslTabDiagnosticLog.write(
@@ -184,27 +224,130 @@ public final class MacOSWindowActivator: WindowActivating {
             "window-activation.target by=window-server pid=\(app.processIdentifier) window=\(window.windowID) axRaise=\(raise)"
         )
         guard !Task.isCancelled else { return .safeFailure(reason: "창 전환이 취소되었습니다.") }
-        logVisibilityAfterSpaceSwitch(window: window, app: app)
+        logOutcome(
+            of: window, app: app, after: "window-server",
+            repeatable: Repeat(activation: activation, handle: target?.windowHandle, checksWindow: true)
+        )
         return .exactWindowSuccess
     }
 
-    /// The window server accepts a focus request even when macOS stays on the current Space, so whether
-    /// the window really came into view is logged once the Space animation has settled.
+    /// A request can succeed while something else ends up in front: macOS may not follow to the
+    /// window's Space, a raised tab may not become the selected one, or another app may take the focus
+    /// back. What is really in front is logged for every switch once animations have settled:
+    /// the frontmost app, the topmost window, and where the target sits in the stacking (0 is the top).
+    ///
+    /// When the switch visibly did not hold, it is made once more (`repeatable`). Claude's window was
+    /// picked at 11:20:34 UTC and IntelliJ was in front 0.6 seconds later, with nothing in between that
+    /// the user could have done; what takes the front back is not known.
     @MainActor
-    private func logVisibilityAfterSpaceSwitch(window: WindowIdentity, app: AppIdentity) {
-        let windowServer = windowServer
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let placement = windowServer.placement(of: window.windowID, ownedBy: app.processIdentifier)
-            let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
-            BokslTabDiagnosticLog.write(
-                "window-activation.window-server.verify pid=\(app.processIdentifier) window=\(window.windowID) visible=\(placement == .onScreen) frontmost=\(frontmost)"
-            )
+    private func logOutcome(of window: WindowIdentity, app: AppIdentity, after path: String, repeatable: Repeat?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + outcomeDelay) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let windowServer = self.windowServer
+                let isVisible = windowServer.placement(of: window.windowID, ownedBy: app.processIdentifier) == .onScreen
+                let frontmost = windowServer.frontmostProcessIdentifier()
+                BokslTabDiagnosticLog.write(
+                    "window-activation.\(path).verify " + Self.outcomeDescription(
+                        window: window,
+                        processIdentifier: app.processIdentifier,
+                        isVisible: isVisible,
+                        frontToBackWindowIDs: windowServer.onScreenWindows()
+                            .compactMap(MRUWindowSnapshot.init(windowInfo:)).map(\.windowID),
+                        frontmostProcessIdentifier: frontmost
+                    )
+                )
+                guard let repeatable,
+                      Self.shouldRepeatSwitch(
+                          frontmostProcessIdentifier: frontmost,
+                          targetProcessIdentifier: app.processIdentifier,
+                          ownProcessIdentifier: getpid(),
+                          targetWindowIsVisible: !repeatable.checksWindow || isVisible,
+                          isLatestActivation: repeatable.activation == self.latestActivation
+                      )
+                else { return }
+                await self.repeatSwitch(to: window, app: app, handle: repeatable.handle, frontmost: frontmost)
+            }
         }
     }
 
-    private func performActivation(_ target: Target, query: AccessibilityQueryBudget) -> SwitchResult? {
+    /// The switch did not hold when another app is in front, or the app is in front but shows another
+    /// window. It is left alone when the user has moved on: the switcher's own panel is in front again,
+    /// or a newer switch has started. Without knowing which app is in front there is nothing to repeat.
+    static func shouldRepeatSwitch(
+        frontmostProcessIdentifier: Int32?,
+        targetProcessIdentifier: Int32,
+        ownProcessIdentifier: Int32,
+        targetWindowIsVisible: Bool,
+        isLatestActivation: Bool
+    ) -> Bool {
+        guard isLatestActivation,
+              let frontmostProcessIdentifier,
+              frontmostProcessIdentifier != ownProcessIdentifier
+        else { return false }
+        return frontmostProcessIdentifier != targetProcessIdentifier || !targetWindowIsVisible
+    }
+
+    /// By now BokslTab is in the background, where an ordinary activation request may be turned down.
+    /// The window server's request is not, so a window it can show is focused through it.
+    @MainActor
+    private func repeatSwitch(to window: WindowIdentity, app: AppIdentity, handle: AXUIElement?, frontmost: Int32?) async {
+        let target = window.tab.map { "tab=\($0.index)" } ?? "window=\(window.windowID)"
+        BokslTabDiagnosticLog.write(
+            "window-activation.repeat pid=\(app.processIdentifier) \(target) frontmost=\(frontmost ?? -1)"
+        )
+        let placement: WindowServerPlacement = window.tab == nil
+            ? windowServer.placement(of: window.windowID, ownedBy: app.processIdentifier)
+            : .missing
+        let focusedByWindowServer = (placement == .onScreen || placement == .offScreen)
+            && windowServer.focus(window.windowID, app.processIdentifier) == .focused
+        if !focusedByWindowServer {
+            _ = appActivator.activate(app: app)
+        }
+        if let handle {
+            let _: Bool? = await accessibility.run(
+                for: app.processIdentifier, duration: 1, requestTimeout: 0.25
+            ) { query in
+                self.focusAndRaise(handle, query: query) == .success
+            }
+        }
+        logOutcome(of: window, app: app, after: "repeat", repeatable: nil)
+    }
+
+    static func outcomeDescription(
+        window: WindowIdentity,
+        processIdentifier: Int32,
+        isVisible: Bool,
+        frontToBackWindowIDs: [String],
+        frontmostProcessIdentifier: Int32?
+    ) -> String {
+        var fields = ["pid=\(processIdentifier)"]
+        if let tab = window.tab {
+            // The row names the tab bar's window; the tab's own window is not known yet.
+            fields.append("tab=\(tab.index)")
+        } else {
+            let targetID = SwitcherItem.windowID(windowID: window.windowID, ownerProcessIdentifier: processIdentifier)
+            fields.append("window=\(window.windowID)")
+            fields.append("visible=\(isVisible)")
+            fields.append("stackIndex=\(frontToBackWindowIDs.firstIndex(of: targetID).map(String.init) ?? "none")")
+        }
+        fields.append("frontmost=\(frontmostProcessIdentifier ?? -1)")
+        fields.append("front=\(frontToBackWindowIDs.first.map { String($0.dropFirst("window:".count)) } ?? "none")")
+        return fields.joined(separator: " ")
+    }
+
+    private func performActivation(
+        _ target: Target,
+        restoresMinimized: Bool,
+        query: AccessibilityQueryBudget
+    ) -> SwitchResult? {
         switch target {
         case .window(let window):
+            // A minimized window is not raised by AXRaise alone. A window on screen cannot be minimized,
+            // and every request spared matters for an app that is slow to answer.
+            if restoresMinimized {
+                _ = query.setAttribute(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            }
             return focusAndRaise(window, query: query) == .success ? .exactWindowSuccess : nil
         case .tab(let match, let plan):
             let raiseError = plan == .focusParentThenSelect ? focusAndRaise(match.window, query: query) : nil
@@ -312,8 +455,9 @@ public final class MacOSWindowActivator: WindowActivating {
         return windows[titleCandidateIndices[localIndex]]
     }
 
-    /// AX lists only the current Space; a handle recorded while the window was visible still reaches it
-    /// after the window moved to another desktop or into full screen.
+    /// AX lists only what the current Space shows. A handle recorded while the window was visible still
+    /// reaches it on another desktop, in full screen, or as an unselected tab of a native tab group;
+    /// raising that handle selects the tab.
     private func rememberedAXWindow(matching window: WindowIdentity, app: AppIdentity, query: AccessibilityQueryBudget) -> AXUIElement? {
         let windows = accessibility.windowElements
         guard let element = windows.element(windowID: window.windowID, processIdentifier: app.processIdentifier) else {
@@ -330,19 +474,6 @@ public final class MacOSWindowActivator: WindowActivating {
             "window-activation.ax.remembered-handle result=hit pid=\(app.processIdentifier) window=\(window.windowID)"
         )
         return element
-    }
-
-    private func findCachedAXWindow(matching window: WindowIdentity, app: AppIdentity) -> AXUIElement? {
-        guard let cachedWindow = accessibility.eventCache.window(matching: window, app: app) else {
-            BokslTabDiagnosticLog.write(
-                "window-activation.ax.event-cache.match result=missing pid=\(app.processIdentifier) window=\(window.windowID) titleKnown=\(window.title?.nonBlankForAdapter != nil)"
-            )
-            return nil
-        }
-        BokslTabDiagnosticLog.write(
-            "window-activation.ax.event-cache.match result=hit pid=\(app.processIdentifier) window=\(window.windowID) titleKnown=\(window.title?.nonBlankForAdapter != nil)"
-        )
-        return cachedWindow
     }
 
     private func axWindows(from appElement: AXUIElement, query: AccessibilityQueryBudget) -> [AXUIElement]? {
@@ -382,14 +513,20 @@ public final class MacOSWindowActivator: WindowActivating {
 
     @MainActor
     private func fallbackToApp(
+        window: WindowIdentity,
         app: AppIdentity,
-        intent: AppActivationIntent,
+        activation: Int,
+        intent: AppActivationIntent = .focusOnly,
         reason: String
     ) -> SwitchResult {
         BokslTabDiagnosticLog.write(
             "window-activation.fallback intent=\(intent) pid=\(app.processIdentifier) reason=\(reason)"
         )
         let activationResult = appActivator.activate(app: app, intent: intent)
+        logOutcome(
+            of: window, app: app, after: "fallback",
+            repeatable: Repeat(activation: activation, handle: nil, checksWindow: false)
+        )
 
         switch activationResult {
         case .appActivationSuccess, .exactWindowSuccess, .limitedAppFallbackSuccess:

@@ -423,15 +423,22 @@ final class AXWindowMatchPolicyTests: XCTestCase {
             bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
             ownerName: "IntelliJ IDEA"
         )
-        let result = TabExpandedWindowCatalogPolicy.expand(
-            snapshot: parent,
-            tabs: [
-                AccessibilityTabSnapshot(index: 0, title: "Secret Project A", isSelected: true, source: .windowTabs),
-                AccessibilityTabSnapshot(index: 1, title: "Secret Project B", isSelected: false, source: .windowTabs)
-            ]
+        let group = NativeTabMatcher.Group(
+            tabBar: AccessibilityWindowSnapshot(
+                windowID: 100,
+                title: "IDE",
+                frame: parent.bounds,
+                tabs: [
+                    AccessibilityTabSnapshot(index: 0, title: "Secret Project A", isSelected: false, source: .windowTabs),
+                    AccessibilityTabSnapshot(index: 1, title: "Secret Project B", isSelected: true, source: .windowTabs)
+                ]
+            ),
+            onScreenRows: [parent],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { _ in false }
         )
 
-        let diagnostic = result.snapshots[0].diagnosticDescription
+        let diagnostic = NativeTabMatcher(groups: [group].compactMap { $0 }).unclaimedTabSnapshots()[0].diagnosticDescription
 
         XCTAssertFalse(diagnostic.contains("Secret Project A"))
         XCTAssertTrue(diagnostic.contains("title=<redacted>"))

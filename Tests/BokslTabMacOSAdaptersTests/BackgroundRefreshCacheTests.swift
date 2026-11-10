@@ -50,7 +50,9 @@ final class BackgroundRefreshCacheTests: XCTestCase {
         cache.onRefresh = nil
     }
 
-    func testKeepsRecentDetailsOnFailureButExpiresStaleTabs() {
+    /// Reported at 10:08:52 UTC: the first list after 86 idle seconds held 5 rows and grew to 8 when
+    /// the refresh arrived, because details older than five seconds were dropped.
+    func testKeepsDetailsUntilNewerOnesArrive() {
         let queue = DispatchQueue(label: "expiry-test")
         let clock = TestClock()
         let cache = BackgroundRefreshCache<Int, String>(queue: queue, now: { clock.time })
@@ -60,8 +62,11 @@ final class BackgroundRefreshCacheTests: XCTestCase {
         cache.refresh(1) { nil }
         queue.sync {}
         XCTAssertEqual(cache.value(for: 1), "previous details")
-        clock.advance(5)
-        XCTAssertNil(cache.value(for: 1))
+        clock.advance(86)
+        XCTAssertEqual(cache.value(for: 1), "previous details")
+        cache.refresh(1) { "newer details" }
+        queue.sync {}
+        XCTAssertEqual(cache.value(for: 1), "newer details")
     }
 
     func testRemovedAppCannotBeResurrectedByInFlightResult() {

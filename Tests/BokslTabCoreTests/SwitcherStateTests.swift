@@ -97,7 +97,7 @@ final class SwitcherStateTests: XCTestCase {
         XCTAssertEqual(item.mruProjectedIDs, ["window:10:1", "app:1"])
     }
 
-    func testAccessibilityEventWindowProjectsStableTitleAliasForMRU() {
+    func testTabRowProjectsStableTitleAliasForMRU() {
         let app = AppIdentity(processIdentifier: 1, localizedName: "IntelliJ IDEA")
         let item = SwitcherItem(
             app: app,
@@ -105,11 +105,11 @@ final class SwitcherStateTests: XCTestCase {
                 windowID: 10,
                 ownerProcessIdentifier: 1,
                 title: "BokslTab – SwitcherState.swift",
-                source: .accessibilityEvent
+                tab: WindowTabIdentity(parentWindowID: 10, index: 2, title: "BokslTab – SwitcherState.swift")
             ))
         )
 
-        XCTAssertEqual(item.mruProjectedIDs, ["window:10:1", "stable-title:1:boksltab", "app:1"])
+        XCTAssertEqual(item.mruProjectedIDs, ["tab:10:1:2", "stable-title:1:boksltab", "window:10:1", "app:1"])
     }
 
     func testMRUOrderingShowsCurrentFirstAndSelectsPreviousByDefault() {

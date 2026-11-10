@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -6,9 +7,12 @@ import Foundation
 enum WindowServerPlacement: Equatable {
     /// On a Space that is visible on some display.
     case onScreen
-    /// Still open but not visible: another desktop, a full-screen Space, minimized or a hidden app.
+    /// Shown on a Space that is not visible right now: another desktop or a full-screen Space.
     case offScreen
-    /// Closed, or the number now belongs to another process.
+    /// Still exists but is shown on no Space: an unselected native tab, minimized, a hidden app, or a
+    /// window its app closed without destroying.
+    case orderedOut
+    /// Destroyed, or the number now belongs to another process.
     case missing
 }
 
@@ -21,20 +25,46 @@ enum WindowServerFocusResult: Equatable {
 /// Window-server facts and focus for a single CoreGraphics window. Replaceable so tests never
 /// touch real windows.
 struct WindowServerWindowAccess {
+    /// Marks window info of a window that is shown on no Space (see `WindowServerPlacement.orderedOut`).
+    static let orderedOutKey = "BokslTabWindowOrderedOut"
+
     var windowInfo: (UInt32) -> [String: Any]?
     var focus: (UInt32, Int32) -> WindowServerFocusResult
+    /// The windows on screen, front to back, and the app in front: read after a switch to see what it
+    /// really brought forward. Without an answer the switch is taken as it is.
+    var onScreenWindows: () -> [[String: Any]] = { [] }
+    var frontmostProcessIdentifier: () -> Int32? = { nil }
 
     static let live = WindowServerWindowAccess(
-        windowInfo: { windowID in
-            (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowID)) as? [[String: Any]])?.first
-        },
+        windowInfo: liveWindowInfo,
         focus: { windowID, processIdentifier in
             WindowServerFocus.focus(windowID: windowID, processIdentifier: processIdentifier)
-        }
+        },
+        onScreenWindows: {
+            CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        },
+        frontmostProcessIdentifier: { NSWorkspace.shared.frontmostApplication?.processIdentifier }
     )
 
     func placement(of windowID: UInt32, ownedBy processIdentifier: Int32) -> WindowServerPlacement {
         WindowServerPlacement(windowInfo: windowInfo(windowID), processIdentifier: processIdentifier)
+    }
+
+    /// The window list only returns a window that is shown on some Space. A window shown on none
+    /// (an unselected tab, a minimized window) is still described when asked for by number.
+    private static func liveWindowInfo(_ windowID: UInt32) -> [String: Any]? {
+        if let shown = (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowID)) as? [[String: Any]])?.first {
+            return shown
+        }
+        var number = UInt(windowID)
+        let numbers = withUnsafeMutablePointer(to: &number) { pointer in
+            pointer.withMemoryRebound(to: UnsafeRawPointer?.self, capacity: 1) { CFArrayCreate(nil, $0, 1, nil) }
+        }
+        guard var description = (CGWindowListCreateDescriptionFromArray(numbers) as? [[String: Any]])?.first else {
+            return nil
+        }
+        description[orderedOutKey] = true
+        return description
     }
 }
 
@@ -44,6 +74,10 @@ extension WindowServerPlacement {
               (windowInfo[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processIdentifier
         else {
             self = .missing
+            return
+        }
+        if (windowInfo[WindowServerWindowAccess.orderedOutKey] as? Bool) == true {
+            self = .orderedOut
             return
         }
         // The key is only present while the window is on a visible Space.

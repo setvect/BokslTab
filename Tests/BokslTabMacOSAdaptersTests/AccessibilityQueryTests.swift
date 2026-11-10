@@ -47,14 +47,50 @@ final class AccessibilityQueryTests: XCTestCase {
         XCTAssertNil(read(1))
         XCTAssertEqual(calls, 1)
         shouldFail = false
-        clock.advance(14)
+        clock.advance(0.6)
         XCTAssertNil(read(1))
         XCTAssertEqual(read(2), true)
         XCTAssertEqual(calls, 3)
         // Skipping a request during cooldown must not extend the retry deadline.
-        clock.advance(2)
+        clock.advance(0.5)
         XCTAssertEqual(read(1), true)
         XCTAssertEqual(calls, 5)
+    }
+
+    /// Reported at 11:03:58 UTC: IntelliJ missed one request while it was busy and was left alone for
+    /// 15 seconds; four project switches in that time only brought the app forward. A busy app is
+    /// asked again after a second. Only an app that keeps failing waits longer, up to 15 seconds.
+    func testRetryDelayStartsShortAndGrowsWhileTheAppKeepsFailing() {
+        let clock = TestClock()
+        var api = testAccessibilityAPI()
+        var shouldFail = true
+        api.copyAttribute = { _, _, _ in shouldFail ? .cannotComplete : .success }
+        let service = MacOSAccessibilityService(api: api, now: { clock.time })
+        let element = AXUIElementCreateApplication(123)
+        func read() -> Bool? {
+            service.workerQueue.sync {
+                service.perform(for: 1) { query in
+                    var value: CFTypeRef?
+                    _ = query.copyAttributeValue(element, kAXTitleAttribute as CFString, &value)
+                    return true
+                }
+            }
+        }
+
+        var delays: [TimeInterval] = []
+        for _ in 0..<6 {
+            XCTAssertNil(read())
+            delays.append(service.secondsUntilRetry(1))
+            clock.advance(service.secondsUntilRetry(1))
+        }
+        XCTAssertEqual(delays, [1, 2, 4, 8, 15, 15])
+
+        // One answer clears the record: the next miss waits a second again.
+        shouldFail = false
+        XCTAssertEqual(read(), true)
+        shouldFail = true
+        XCTAssertNil(read())
+        XCTAssertEqual(service.secondsUntilRetry(1), 1)
     }
 
     func testActionTimeoutPreventsFurtherActionsAndUsesSameCooldown() {

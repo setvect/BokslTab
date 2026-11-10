@@ -82,7 +82,6 @@ public struct WindowFrameIdentity: Hashable, Sendable {
 public enum WindowIdentitySource: String, Hashable, Sendable {
     case coreGraphics
     case accessibilityOnly
-    case accessibilityEvent
 }
 
 public struct WindowIdentity: Hashable, Sendable {
@@ -171,7 +170,8 @@ public struct SwitcherItem: Identifiable, Hashable, Sendable {
             return [id]
         case .window(let window):
             var projectedIDs = [id]
-            if (window.source == .accessibilityEvent || window.tab != nil),
+            // A tab row's number follows its parent window, so its title keeps its place in the order.
+            if window.tab != nil,
                let title = window.title,
                let stableTitleID = SwitcherItem.stableTitleAliasID(
                    ownerProcessIdentifier: window.ownerProcessIdentifier,

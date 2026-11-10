@@ -4,36 +4,110 @@ import CoreGraphics
 import XCTest
 
 final class WindowTabPolicyTests: XCTestCase {
-    func testTabExpansionCreatesSeparateWindowItemsForUsableTabs() {
-        let parent = WindowSnapshot(
-            identity: WindowIdentity(windowID: 100, ownerProcessIdentifier: 10, title: "IDE"),
-            bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
+    private let groupFrame = CGRect(x: 0, y: 30, width: 2560, height: 1410)
+
+    private func window(_ windowID: UInt32, title: String?, frame: CGRect? = nil) -> WindowSnapshot {
+        WindowSnapshot(
+            identity: WindowIdentity(windowID: windowID, ownerProcessIdentifier: 10, title: title),
+            bounds: frame ?? groupFrame,
             ownerName: "IntelliJ IDEA"
         )
-        let result = TabExpandedWindowCatalogPolicy.expand(
-            snapshot: parent,
-            tabs: [
-                AccessibilityTabSnapshot(index: 0, title: "Project A", isSelected: false, source: .windowTabs),
-                AccessibilityTabSnapshot(index: 1, title: "Project B", isSelected: true, source: .windowTabs)
-            ]
-        )
+    }
 
-        XCTAssertTrue(result.didExpand)
-        XCTAssertEqual(result.snapshots.map(\.identity.title), ["Project A", "Project B"])
-        XCTAssertEqual(result.snapshots.map { $0.identity.tab?.index }, [0, 1])
-        XCTAssertEqual(result.snapshots[1].identity.tab?.isSelected, true)
-        XCTAssertEqual(result.snapshots[1].identity.tab?.parentTitle, "IDE")
-        XCTAssertEqual(result.snapshots.map(\.identity.windowID), [100, 100])
-
-        let framed = TabExpandedWindowCatalogPolicy.expand(
-            snapshot: parent,
-            tabs: [
-                AccessibilityTabSnapshot(index: 0, title: "Project A", isSelected: false, source: .windowTabs),
-                AccessibilityTabSnapshot(index: 1, title: "Project B", isSelected: true, source: .windowTabs)
-            ],
-            parentFrame: WindowFrameIdentity(x: 10, y: 20, width: 900, height: 700)
+    private func tabBar(of windowID: UInt32?, selected: Int, titles: [String] = ["Project A", "Project B", "Project C"]) -> AccessibilityWindowSnapshot {
+        AccessibilityWindowSnapshot(
+            windowID: windowID,
+            title: nil,
+            frame: groupFrame,
+            tabs: titles.enumerated().map { index, title in
+                AccessibilityTabSnapshot(index: index, title: title, isSelected: index == selected, source: .windowTabGroup)
+            }
         )
-        XCTAssertEqual(framed.snapshots[0].identity.tab?.parentFrame, WindowFrameIdentity(x: 10, y: 20, width: 900, height: 700))
+    }
+
+    /// The on-screen window is its own selected tab and keeps its window row. Tabs whose windows were
+    /// never seen become tab rows of that window.
+    func testOnScreenWindowKeepsItsRowAndUnseenTabsBecomeTabRows() throws {
+        let onScreen = window(1211, title: "Custom title that names no project")
+        let group = try XCTUnwrap(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1211, selected: 1),
+            onScreenRows: [onScreen],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { _ in false }
+        ))
+
+        let rows = NativeTabMatcher(groups: [group]).unclaimedTabSnapshots()
+
+        XCTAssertEqual(rows.map(\.identity.title), ["Project A", "Project C"])
+        XCTAssertEqual(rows.map { $0.identity.tab?.index }, [0, 2])
+        XCTAssertEqual(rows.map(\.identity.windowID), [1211, 1211])
+        XCTAssertEqual(rows.map { $0.identity.tab?.parentWindowID }, [1211, 1211])
+        XCTAssertEqual(rows.map { $0.identity.tab?.isSelected }, [false, false])
+        XCTAssertEqual(rows[0].identity.tab?.parentTitle, "Custom title that names no project")
+        XCTAssertEqual(rows[0].identity.tab?.parentFrame, WindowFrameIdentity(x: 0, y: 30, width: 2560, height: 1410))
+    }
+
+    /// A remembered project window takes the tab that names it, so it is listed once, under its number.
+    func testRememberedWindowClaimsTheTabThatNamesIt() throws {
+        let group = try XCTUnwrap(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1211, selected: 0),
+            onScreenRows: [window(1211, title: "Project A – Main.kt")],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { _ in false }
+        ))
+        let matcher = NativeTabMatcher(groups: [group])
+
+        XCTAssertTrue(matcher.claimTab(processIdentifier: 10, keys: ["project b"]))
+        XCTAssertFalse(matcher.claimTab(processIdentifier: 10, keys: ["project b"]), "one tab stands for one window")
+        XCTAssertFalse(matcher.claimTab(processIdentifier: 99, keys: ["project c"]), "another app's tab bar")
+        XCTAssertFalse(matcher.claimTab(processIdentifier: 10, keys: ["closed project"]))
+
+        XCTAssertEqual(matcher.unclaimedTabSnapshots().map(\.identity.title), ["Project C"])
+    }
+
+    /// Reported at 10:09:36 UTC: right after a project switch the details still described the previous
+    /// project's window. That window is an unselected tab now; the window on screen took its place.
+    func testTabBarReadBeforeATabSwitchBelongsToTheWindowNowOnScreen() throws {
+        let group = try XCTUnwrap(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1241, selected: 2),
+            onScreenRows: [window(1211, title: "Project A – Main.kt")],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { $0 == 1241 }
+        ))
+        let matcher = NativeTabMatcher(groups: [group])
+
+        XCTAssertEqual(group.parent.identity.windowID, 1211)
+        XCTAssertTrue(matcher.claimTab(processIdentifier: 10, keys: ["project c"]), "the window the details described")
+        XCTAssertEqual(matcher.unclaimedTabSnapshots().map(\.identity.title), ["Project B"])
+        XCTAssertEqual(matcher.unclaimedTabSnapshots().map { $0.identity.tab?.parentWindowID }, [1211])
+    }
+
+    func testOnScreenWindowIsRecognizedByItsRememberedTabTitle() throws {
+        let group = try XCTUnwrap(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1241, selected: 2),
+            onScreenRows: [window(1211, title: "~/work/a – Main.kt")],
+            rememberedKeysByWindowID: [1211: ["project a"]],
+            isOrderedOut: { $0 == 1241 }
+        ))
+
+        XCTAssertEqual(group.unclaimedTabs.map(\.title), ["Project B", "Project C"])
+    }
+
+    func testTabBarWithoutAWindowOfItsGroupOnScreenIsIgnored() {
+        // The described window moved to another Space: it is neither on screen nor an unselected tab.
+        XCTAssertNil(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1241, selected: 2),
+            onScreenRows: [window(1211, title: "Project A – Main.kt")],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { _ in false }
+        ))
+        // An unselected tab now, but the only window on screen belongs to another group.
+        XCTAssertNil(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1241, selected: 2),
+            onScreenRows: [window(1211, title: "Project A – Main.kt", frame: CGRect(x: 2600, y: 30, width: 800, height: 600))],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { $0 == 1241 }
+        ))
     }
 
     func testNativeWindowTabGroupPolicyUsesDirectAXTabButtonsOnly() {
@@ -64,29 +138,23 @@ final class WindowTabPolicyTests: XCTestCase {
         XCTAssertEqual(result, ["project-a", "project-b"])
     }
 
-    func testTabExpansionFallsBackForSingleOrPlaceholderTabs() {
-        let parent = WindowSnapshot(
-            identity: WindowIdentity(windowID: 100, ownerProcessIdentifier: 10, title: "IDE"),
-            bounds: CGRect(x: 0, y: 0, width: 900, height: 700),
-            ownerName: "IntelliJ IDEA"
-        )
+    func testSingleTabAndPlaceholderTitlesProduceNoTabRows() throws {
+        let onScreen = window(1211, title: "IDE")
 
-        let single = TabExpandedWindowCatalogPolicy.expand(
-            snapshot: parent,
-            tabs: [AccessibilityTabSnapshot(index: 0, title: "Project A", isSelected: true, source: .windowTabs)]
-        )
-        XCTAssertFalse(single.didExpand)
-        XCTAssertEqual(single.fallbackReason, "single-tab")
+        XCTAssertNil(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1211, selected: 0, titles: ["Project A"]),
+            onScreenRows: [onScreen],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { _ in false }
+        ))
 
-        let placeholders = TabExpandedWindowCatalogPolicy.expand(
-            snapshot: parent,
-            tabs: [
-                AccessibilityTabSnapshot(index: 0, title: "창 101", isSelected: false, source: .windowTabs),
-                AccessibilityTabSnapshot(index: 1, title: "Window 102", isSelected: true, source: .windowTabs)
-            ]
-        )
-        XCTAssertFalse(placeholders.didExpand)
-        XCTAssertEqual(placeholders.fallbackReason, "placeholder-title")
+        let placeholders = try XCTUnwrap(NativeTabMatcher.Group(
+            tabBar: tabBar(of: 1211, selected: 2, titles: ["창 101", "Window 102", "Project C"]),
+            onScreenRows: [onScreen],
+            rememberedKeysByWindowID: [:],
+            isOrderedOut: { _ in false }
+        ))
+        XCTAssertTrue(NativeTabMatcher(groups: [placeholders]).unclaimedTabSnapshots().isEmpty)
     }
 
     func testAXTabMatchPolicyRequiresTitleEvidence() {
