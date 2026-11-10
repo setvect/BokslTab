@@ -16,7 +16,7 @@ enum BokslTabAbout {
         )
         var options: [NSApplication.AboutPanelOptionKey: Any] = [
             .applicationName: "BokslTab",
-            .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1",
+            .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.2",
             .version: "",
             .credits: credits
         ]
